@@ -102,6 +102,39 @@ services:
         condition: service_healthy
     restart: "no"
 
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./infra/tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "3200:3200"
+
+  loki:
+    image: grafana/loki:3.1.0
+    command: ["-config.file=/etc/loki.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./infra/loki.yaml:/etc/loki.yaml:ro
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["observability"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3001:3000"
+    depends_on:
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+
 volumes:
   db-data:
   redis-data:
