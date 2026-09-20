@@ -59,9 +59,10 @@ Useful targets:
 The backend has no real identity provider in this foundation stage. Two mock
 modes cover local development and the public demo:
 
-- `MOCK_OIDC=1` — a static developer principal injected on every request.
-- `MOCK_OIDC=2` — a persona picker on `/login`; the session is bound to the
-  chosen demo identity for the whole conversation.
+- `MOCK_OIDC=2` (default) — a persona picker on `/login`; the session is bound
+  to the chosen demo identity for the whole conversation.
+- `MOCK_OIDC=1` — a static developer principal injected on every request, for
+  backend-only work via curl.
 
 The demo data is fully synthetic: a fictional company with departments, people,
 projects, assets, objectives, tickets, and a document corpus. No real company
