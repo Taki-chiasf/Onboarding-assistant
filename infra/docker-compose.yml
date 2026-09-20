@@ -80,6 +80,17 @@ services:
       timeout: 3s
       retries: 5
 
+  web:
+    build:
+      context: ./web
+    environment:
+      BACKEND_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+
   db-seed:
     build:
       context: ./backend
