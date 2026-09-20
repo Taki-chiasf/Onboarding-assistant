@@ -14,9 +14,6 @@ Full-stack and portfolio-grade:
   execution with row-level security.
 - **Inference** — Mistral La Plateforme end-to-end (LLM, embeddings, OCR).
 
-> Status: early bootstrap. Setup and quickstart instructions land with the
-> foundation milestone.
-
 ## Layout
 
 | Path | Purpose |
@@ -30,5 +27,42 @@ Full-stack and portfolio-grade:
 
 ## Quickstart
 
-Coming soon — `make up` will bring up the full stack once the foundation is in
-place.
+Prerequisites: Docker with the Compose plugin. Everything else runs in
+containers.
+
+```sh
+cp .env.example .env
+# Set MOCK_OIDC=2 in .env to enable the persona picker on /login
+make up
+```
+
+`make up` builds the images, starts Postgres (pgvector), Redis, the API, the
+worker, and the web app, runs the schema migrations, and seeds a synthetic
+company. Then open <http://localhost:3000>, pick a demo identity, and ask a
+question.
+
+Useful targets:
+
+| Command | What it does |
+|---|---|
+| `make up` | Build and start the full stack |
+| `make down` | Stop the stack |
+| `make seed` | Re-seed the demo data |
+| `make demo-reset` | Re-seed and clear conversation history |
+| `make obs` | Start the stack plus Grafana/Tempo/Loki |
+| `make lint` | Lint backend (ruff) and web (eslint) |
+| `make typecheck` | mypy (backend) and tsc (web) |
+| `make test` | Run the full test suite with the coverage gate |
+
+## Auth modes
+
+The backend has no real identity provider in this foundation stage. Two mock
+modes cover local development and the public demo:
+
+- `MOCK_OIDC=1` — a static developer principal injected on every request.
+- `MOCK_OIDC=2` — a persona picker on `/login`; the session is bound to the
+  chosen demo identity for the whole conversation.
+
+The demo data is fully synthetic: a fictional company with departments, people,
+projects, assets, objectives, tickets, and a document corpus. No real company
+data is used anywhere.
