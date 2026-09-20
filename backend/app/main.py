@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.api import auth, health
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     init_otel(settings.app_name, settings.otel_exporter_otlp_endpoint)
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
+    FastAPIInstrumentor.instrument_app(app)
     app.include_router(health.router)
     app.include_router(auth.router)
     return app
