@@ -19,8 +19,12 @@ FROM base AS runtime
 RUN useradd --uid 10001 --create-home appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
+COPY alembic.ini entrypoint.sh ./
+COPY migrations ./migrations
 
 ENV PATH="/app/.venv/bin:$PATH"
+
+RUN chmod +x /app/entrypoint.sh
 
 USER appuser
 EXPOSE 8000
@@ -28,4 +32,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/app/entrypoint.sh"]

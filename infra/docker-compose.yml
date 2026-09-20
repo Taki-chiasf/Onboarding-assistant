@@ -1,0 +1,85 @@
+name: onboarding-assistant
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: onboarding_assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./infra/docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d onboarding_assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    command: ["--config", "/etc/otelcol-contrib/config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./infra/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      MOCK_OIDC: ${MOCK_OIDC:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret}
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+      REDIS_URL: redis://redis:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      DEV_PRINCIPAL_SUB: ${DEV_PRINCIPAL_SUB:-dev-user}
+      DEV_PRINCIPAL_EMAIL: ${DEV_PRINCIPAL_EMAIL:-dev@example.com}
+      DEV_PRINCIPAL_DEPT: ${DEV_PRINCIPAL_DEPT:-Engineering}
+      DEV_PRINCIPAL_ROLE: ${DEV_PRINCIPAL_ROLE:-employee}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: ingest-worker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,redis; redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  db-data:
+  redis-data:
