@@ -1,0 +1,12 @@
+provider: mistral
+models:
+  grounding: mistral-large-2512
+  router: mistral-small-2603
+  condenser: mistral-small-2603
+  sql_builder: mistral-large-2512
+  rag_code: codestral-2508
+  judge: magistral-medium-2509
+  escalation: magistral-small-2509
+  embed: mistral-embed
+  ocr: mistral-ocr-4-0
+  moderation: mistral-moderation-2603

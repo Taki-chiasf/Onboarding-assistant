@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     otel_exporter_otlp_endpoint: str = ""
 
+    mistral_api_key: str = ""
+
     mock_oidc: int = 1
     dev_principal_sub: str = "dev-user"
     dev_principal_email: str = "dev@example.com"
