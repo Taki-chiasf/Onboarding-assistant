@@ -5,6 +5,7 @@ description = "FastAPI backend for the onboarding assistant"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",
+    "starlette<1.0",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
