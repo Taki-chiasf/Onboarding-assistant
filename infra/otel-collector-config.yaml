@@ -12,11 +12,11 @@ processors:
 exporters:
   debug:
     verbosity: basic
-  otlp/tempo:
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
-  otlphttp/loki:
+  otlp_http/loki:
     endpoint: http://loki:3100/otlp
 
 service:
@@ -24,8 +24,8 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlp/tempo, debug]
+      exporters: [otlp_grpc/tempo, debug]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/loki, debug]
+      exporters: [otlp_http/loki, debug]

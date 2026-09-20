@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-COMPOSE := docker compose
+COMPOSE := docker compose --project-directory . -f infra/docker-compose.yml
 
 .PHONY: help up down obs logs ps seed demo-reset \
         install backend-install web-install \

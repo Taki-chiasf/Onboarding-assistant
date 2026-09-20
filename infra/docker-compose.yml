@@ -31,19 +31,18 @@ services:
       retries: 10
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.115.0
-    command: ["--config", "/etc/otelcol-contrib/config.yaml"]
+    image: otel/opentelemetry-collector:0.159.0
     ports:
       - "4317:4317"
       - "4318:4318"
     volumes:
-      - ./infra/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
 
   api:
     build:
       context: ./backend
     environment:
-      MOCK_OIDC: ${MOCK_OIDC:-1}
+      MOCK_OIDC: ${MOCK_OIDC:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret}
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
