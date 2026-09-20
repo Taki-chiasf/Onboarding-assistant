@@ -19,6 +19,7 @@ FROM base AS runtime
 RUN useradd --uid 10001 --create-home appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
+COPY scripts ./scripts
 COPY alembic.ini entrypoint.sh ./
 COPY migrations ./migrations
 

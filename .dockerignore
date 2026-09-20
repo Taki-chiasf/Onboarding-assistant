@@ -1,0 +1,15 @@
+.git/
+.opencode/
+.env
+.envrc
+.venv/
+backend/.venv/
+web/node_modules/
+web/.next/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+db-data/
+redis-data/

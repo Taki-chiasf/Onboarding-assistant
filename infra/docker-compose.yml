@@ -80,6 +80,17 @@ services:
       timeout: 3s
       retries: 5
 
+  db-seed:
+    build:
+      context: ./backend
+    entrypoint: ["python", "-m", "scripts.seed"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   db-data:
   redis-data:
