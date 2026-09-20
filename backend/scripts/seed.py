@@ -147,9 +147,7 @@ def generate_tickets(fake: Faker, members: list[dict[str, Any]]) -> list[dict[st
                 "requester_email": fake.random_element(emails),
                 "category": fake.random_element(TICKET_CATEGORIES),
                 "status": fake.random_element(TICKET_STATUSES),
-                "created_at": fake.date_time_between(
-                    start_date="-3M", end_date="now", tzinfo=UTC
-                ),
+                "created_at": fake.date_time_between(start_date="-3M", end_date="now", tzinfo=UTC),
             }
         )
     return tickets
