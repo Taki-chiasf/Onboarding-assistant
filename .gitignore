@@ -1,0 +1,39 @@
+# Agent/editor state
+.opencode/
+
+# Local environment + secrets
+.envrc
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local data / compose volumes
+db-data/
+redis-data/
