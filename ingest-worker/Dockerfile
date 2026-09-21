@@ -19,6 +19,7 @@ FROM base AS runtime
 RUN useradd --uid 10001 --create-home appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY backend/app ./app
+COPY backend/seed_corpus ./seed_corpus
 
 ENV PATH="/app/.venv/bin:$PATH"
 

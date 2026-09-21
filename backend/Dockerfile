@@ -20,6 +20,7 @@ RUN useradd --uid 10001 --create-home appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
 COPY scripts ./scripts
+COPY seed_corpus ./seed_corpus
 COPY alembic.ini entrypoint.sh ./
 COPY migrations ./migrations
 

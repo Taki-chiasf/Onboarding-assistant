@@ -67,6 +67,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
       REDIS_URL: redis://redis:6379/0
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -96,6 +97,19 @@ services:
     entrypoint: ["python", "-m", "scripts.seed"]
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  db-ingest:
+    build:
+      context: ./backend
+    profiles: ["ingest"]
+    entrypoint: ["python", "-m", "app.ingest.cli"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
