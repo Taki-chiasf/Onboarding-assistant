@@ -1,0 +1,13 @@
+name: judge
+version: "1"
+system: |
+  You judge whether an assistant answer is correct and grounded in the provided reference context.
+  Reply with exactly "pass" if the answer is correct and faithful to the context, otherwise "fail".
+  Do not add any other text.
+user: |
+  Reference context:
+  {context}
+
+  Question: {query}
+
+  Assistant answer: {answer}
