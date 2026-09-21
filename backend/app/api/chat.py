@@ -1,0 +1,113 @@
+"""Chat and conversation endpoints."""
+
+from __future__ import annotations
+
+import json
+import uuid
+from collections.abc import AsyncIterator
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.auth.mock_oidc import get_principal
+from app.auth.principal import Principal
+from app.llm.client import get_provider
+from app.llm.models import load_models
+from app.models import Conversation, Message
+from app.rag.orchestrator import ChatOrchestrator
+from app.rag.retrieval import Retriever
+
+router = APIRouter(prefix="/api", tags=["chat"])
+
+
+class ChatRequest(BaseModel):
+    query: str
+    conversation_id: uuid.UUID | None = None
+
+
+def _build_orchestrator(engine: AsyncEngine) -> ChatOrchestrator:
+    provider = get_provider()
+    models = load_models()
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return await provider.embed(models.models["embed"], texts)
+
+    retriever = Retriever(engine, embed)
+    return ChatOrchestrator(engine, provider, models, retriever)
+
+
+def get_chat_orchestrator(request: Request) -> ChatOrchestrator:
+    return _build_orchestrator(request.app.state.engine)
+
+
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
+OrchestratorDep = Annotated[ChatOrchestrator, Depends(get_chat_orchestrator)]
+
+
+def _sse(event: str, data: object) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/chat")
+async def chat(
+    payload: ChatRequest,
+    request: Request,
+    principal: PrincipalDep,
+    orchestrator: OrchestratorDep,
+) -> StreamingResponse:
+    async def event_stream() -> AsyncIterator[str]:
+        async for event in orchestrator.stream(
+            payload.query, principal, payload.conversation_id
+        ):
+            yield _sse(str(event["event"]), event["data"])
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get("/conversations")
+async def list_conversations(request: Request, principal: PrincipalDep) -> list[dict[str, object]]:
+    engine = request.app.state.engine
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            select(Conversation)
+            .where(Conversation.user_id == principal.sub)
+            .order_by(Conversation.created_at.desc())
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "id": str(row.id),
+            "title": row.title,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+@router.get("/conversations/{conversation_id}/messages")
+async def get_messages(
+    conversation_id: uuid.UUID, request: Request, principal: PrincipalDep
+) -> list[dict[str, object]]:
+    engine = request.app.state.engine
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.asc())
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "id": str(row.id),
+            "role": row.role,
+            "content": row.content,
+            "cost_usd": str(row.cost_usd) if row.cost_usd is not None else None,
+            "model_version": row.model_version,
+            "prompt_version": row.prompt_version,
+        }
+        for row in rows
+    ]

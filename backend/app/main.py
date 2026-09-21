@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.api import auth, health
+from app.api import auth, chat, health
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.otel import init_otel
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     FastAPIInstrumentor.instrument_app(app)
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(chat.router)
     return app
 
 
