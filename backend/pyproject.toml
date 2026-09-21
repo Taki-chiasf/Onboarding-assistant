@@ -58,6 +58,10 @@ select = ["E", "F", "I", "W", "UP", "B"]
 python_version = "3.12"
 strict = true
 
+[[tool.mypy.overrides]]
+module = ["sentence_transformers", "sentence_transformers.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
