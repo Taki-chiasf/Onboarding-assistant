@@ -36,6 +36,9 @@ dev = [
     "fpdf2>=2.7",
     "types-PyYAML>=6.0",
 ]
+bench = [
+    "sentence-transformers>=3.0",
+]
 
 [build-system]
 requires = ["hatchling"]
