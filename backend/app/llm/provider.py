@@ -2,7 +2,15 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
 
 from mistralai.client import Mistral
-from mistralai.client.models import AssistantMessage, SystemMessage, TextChunk, UserMessage
+from mistralai.client.models import (
+    AssistantMessage,
+    DocumentURLChunk,
+    File,
+    OCRResponse,
+    SystemMessage,
+    TextChunk,
+    UserMessage,
+)
 from pydantic import BaseModel
 
 
@@ -55,3 +63,23 @@ class MistralProvider:
             text = _extract_text(delta.content if delta else None)
             if text:
                 yield text
+
+    async def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
+        response = await self._client.embeddings.create_async(model=model, inputs=list(texts))
+        ordered = sorted(response.data, key=lambda item: item.index or 0)
+        embeddings: list[list[float]] = []
+        for item in ordered:
+            if item.embedding is not None:
+                embeddings.append(item.embedding)
+        return embeddings
+
+    async def ocr_pdf(self, model: str, file_name: str, content: bytes) -> OCRResponse:
+        uploaded = await self._client.files.upload_async(
+            file=File(file_name=file_name, content=content, content_type="application/pdf"),
+            purpose="ocr",
+        )
+        signed = await self._client.files.get_signed_url_async(file_id=uploaded.id)
+        return await self._client.ocr.process_async(
+            model=model,
+            document=DocumentURLChunk(document_url=signed.url),
+        )
