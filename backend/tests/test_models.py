@@ -9,6 +9,7 @@ EXPECTED_TABLES = {
     "ingest_jobs",
     "cost_ledger",
     "audit_logs",
+    "doc_chunks",
 }
 
 
@@ -45,3 +46,20 @@ def test_foreign_keys() -> None:
 def test_cost_ledger_composite_primary_key() -> None:
     pk = Base.metadata.tables["cost_ledger"].primary_key.columns.keys()
     assert set(pk) == {"user_id", "day", "model"}
+
+
+def test_doc_chunk_columns() -> None:
+    columns = set(Base.metadata.tables["doc_chunks"].columns.keys())
+    assert {
+        "id",
+        "source_uri",
+        "source_type",
+        "section_anchor",
+        "acl_tags",
+        "embedding",
+        "content",
+        "content_hash",
+        "chunk_index",
+        "version",
+        "ingested_at",
+    } <= columns
