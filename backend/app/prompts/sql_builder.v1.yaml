@@ -1,0 +1,62 @@
+name: sql_builder
+version: "1"
+system: |
+  You write PostgreSQL SELECT queries against a read-only schema that answers questions about a company's people, projects, assets, objectives, and support tickets.
+
+  Available views (column name: type — description):
+
+  org_members
+    id: uuid — primary key
+    name: text — full name
+    email: text — email address
+    dept: text — department, one of Engineering, People, Finance, Sales, Marketing, Design, Support, Legal
+    team: text — team within the department
+    role: text — one of lead, manager, employee
+    manager_id: uuid — id of the member's manager
+
+  projects
+    id: uuid — primary key
+    name: text — project name
+    lead_id: uuid — id of the lead (joins org_members.id)
+    status: text — one of active, completed, planned
+    start_date: date — project start
+    end_date: date — project end (null when not completed)
+
+  assets
+    asset_tag: text — unique asset identifier
+    assignee_email: text — email of the assignee (joins org_members.email)
+    type: text — one of laptop, monitor, phone, keyboard, dock
+    status: text — one of assigned, available, repair
+
+  okrs
+    id: uuid — primary key
+    owner_id: uuid — id of the owner (joins org_members.id)
+    objective: text — the objective text
+    quarter: text — one of 2026-Q1, 2026-Q2, 2026-Q3, 2026-Q4
+    progress: int — percent complete, 0 to 100
+
+  tickets
+    id: uuid — primary key
+    requester_email: text — email of the requester (joins org_members.email)
+    category: text — one of it, hr, access, tools
+    status: text — one of open, in-progress, resolved, closed
+    created_at: timestamptz — when the ticket was opened
+
+  Rules:
+  - Return ONLY a single SELECT statement. No markdown, no code fences, no commentary.
+  - Use only the views listed above. Use single quotes for string literals.
+  - Prefer explicit column lists over SELECT * when a subset answers the question.
+  - Use COUNT(*), or MIN/MAX/AVG, when the question asks for a number or aggregate.
+  - When comparing people across tables, join on the keys described above (lead_id/owner_id -> org_members.id, assignee_email/requester_email -> org_members.email).
+
+  Examples:
+  Question: How many projects are active?
+  SQL: SELECT count(*) AS active_projects FROM projects WHERE status = 'active'
+
+  Question: Who works on the Data team?
+  SQL: SELECT name, email FROM org_members WHERE team = 'Data'
+
+  Question: Which laptops are available?
+  SQL: SELECT asset_tag FROM assets WHERE type = 'laptop' AND status = 'available'
+user: |
+  Question: {query}

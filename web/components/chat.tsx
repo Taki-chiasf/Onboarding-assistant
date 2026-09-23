@@ -13,10 +13,18 @@ export type Source = {
   score: number;
 };
 
+export type SqlDetail = {
+  sql: string;
+  row_count: number;
+  truncated: boolean;
+  latency_ms: number;
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  sql?: SqlDetail;
   model?: string;
   promptVersion?: string;
   traceId?: string;
@@ -63,7 +71,15 @@ type Principal = {
   }
 }
 
-function SourcePanel({ sources, traceId }: { sources: Source[]; traceId?: string }) {
+function SourcePanel({
+  sources,
+  sql,
+  traceId,
+}: {
+  sources: Source[];
+  sql?: SqlDetail;
+  traceId?: string;
+}) {
   const [tab, setTab] = useState<"sources" | "sql" | "trace">("sources");
 
   return (
@@ -93,7 +109,20 @@ function SourcePanel({ sources, traceId }: { sources: Source[]; traceId?: string
             ))}
           </ul>
         )}
-        {tab === "sql" && <p className="text-muted-foreground">Live data queries are not available yet.</p>}
+        {tab === "sql" &&
+          (sql ? (
+            <details>
+              <summary className="cursor-pointer font-medium text-foreground">
+                {sql.row_count} row{sql.row_count === 1 ? "" : "s"} in {sql.latency_ms}ms
+                {sql.truncated ? " (truncated)" : ""}
+              </summary>
+              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-muted p-2 text-muted-foreground">
+                {sql.sql}
+              </pre>
+            </details>
+          ) : (
+            <p className="text-muted-foreground">No live data query for this answer.</p>
+          ))}
         {tab === "trace" && (
           <p className="break-all text-muted-foreground">{traceId ?? "Trace not recorded."}</p>
         )}
@@ -173,6 +202,8 @@ export function Chat({ principal }: { principal: Principal }) {
             createdNew = true;
           }
           applyAssistant((m) => ({ ...m, sources: (data.sources as Source[]) ?? [] }));
+        } else if (event === "sql") {
+          applyAssistant((m) => ({ ...m, sql: data as unknown as SqlDetail }));
         } else if (event === "token") {
           applyAssistant((m) => ({ ...m, content: m.content + String(data.text ?? "") }));
         } else if (event === "done") {
@@ -247,9 +278,14 @@ export function Chat({ principal }: { principal: Principal }) {
                 )}
               >
                 <p className="whitespace-pre-wrap">{message.content || "…"}</p>
-                {message.role === "assistant" && message.sources && message.sources.length > 0 && (
-                  <SourcePanel sources={message.sources} traceId={message.traceId} />
-                )}
+                {message.role === "assistant" &&
+                  ((message.sources && message.sources.length > 0) || message.sql) && (
+                    <SourcePanel
+                      sources={message.sources ?? []}
+                      sql={message.sql}
+                      traceId={message.traceId}
+                    />
+                  )}
               </div>
             </div>
           ))}
