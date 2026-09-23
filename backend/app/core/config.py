@@ -25,6 +25,10 @@ class Settings(BaseSettings):
 
     session_secret: str = "dev-only-insecure-secret"
 
+    sql_readonly_role: str = "app_readonly"
+    sql_statement_timeout_ms: int = 5000
+    sql_max_rows: int = 100
+
 
 @lru_cache
 def get_settings() -> Settings:

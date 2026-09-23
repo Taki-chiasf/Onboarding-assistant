@@ -15,6 +15,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "redis>=5.0",
     "alembic>=1.13",
+    "sqlglot>=26.0",
     "rq>=2.0",
     "faker>=25.0",
     "mistralai>=1.0",
