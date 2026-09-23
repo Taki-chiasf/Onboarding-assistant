@@ -102,6 +102,23 @@ services:
         condition: service_healthy
     restart: "no"
 
+  pgbouncer:
+    image: edoburu/pgbouncer@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd # PgBouncer 1.25.2
+    environment:
+      DB_HOST: db
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: onboarding_assistant
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "20"
+    ports:
+      - "6432:5432"
+    depends_on:
+      db:
+        condition: service_healthy
+
   db-ingest:
     build:
       context: ./backend
