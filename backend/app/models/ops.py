@@ -1,8 +1,10 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import BigInteger, Date, DateTime, Integer, Numeric, String, Text, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -39,6 +41,7 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target: Mapped[str | None] = mapped_column(String(255))
     trace_id: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

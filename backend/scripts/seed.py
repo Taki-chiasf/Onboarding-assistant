@@ -1,7 +1,8 @@
 """Deterministic seed data for the demo organization.
 
 Generates a synthetic company (people, projects, assets, objectives, tickets)
-and loads it into a dedicated schema, then grants a read-only role used by the
+and loads it into a dedicated schema, then creates security-invoker views with
+row-level security policies and grants them to a read-only role used by the
 query layer. The same seed always produces the same data.
 """
 
@@ -240,6 +241,68 @@ def _ensure_readonly_role(conn: Connection) -> None:
     conn.execute(text(f"GRANT SELECT ON ALL TABLES IN SCHEMA {ORG_SCHEMA} TO {READONLY_ROLE}"))
 
 
+_READ_VIEWS: dict[str, str] = {
+    "org_members": "SELECT id, name, email, dept, team, role, manager_id FROM org.org_members",
+    "projects": "SELECT id, name, lead_id, status, start_date, end_date FROM org.projects",
+    "assets": "SELECT asset_tag, assignee_email, type, status FROM org.assets",
+    "okrs": "SELECT id, owner_id, objective, quarter, progress FROM org.okrs",
+    "tickets": "SELECT id, requester_email, category, status, created_at FROM org.tickets",
+}
+
+
+def _dept_setting() -> str:
+    return "current_setting('app.principal_dept', true)"
+
+
+def _role_setting() -> str:
+    return "current_setting('app.principal_role', true)"
+
+
+def _create_read_views(conn: Connection) -> None:
+    """Create security-invoker views and row-level security policies.
+
+    The views run with the invoker's privileges so row-level security on the
+    base tables is applied to the calling role. Policies are deny-by-default:
+    without a department setting (or an admin role) no rows are visible.
+    """
+    for name, select in _READ_VIEWS.items():
+        conn.execute(text(f"DROP VIEW IF EXISTS public.{name} CASCADE"))
+        conn.execute(text(f"CREATE VIEW public.{name} WITH (security_invoker = true) AS {select}"))
+        conn.execute(text(f"GRANT SELECT ON public.{name} TO {READONLY_ROLE}"))
+
+    dept = _dept_setting()
+    is_admin = f"{_role_setting()} = 'admin'"
+    policies: dict[str, str] = {
+        "org_members": f"{is_admin} OR dept = {dept}",
+        "projects": (
+            f"{is_admin} OR lead_id IS NULL OR lead_id IN "
+            f"(SELECT id FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
+        ),
+        "assets": (
+            f"{is_admin} OR assignee_email IS NULL OR assignee_email IN "
+            f"(SELECT email FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
+        ),
+        "okrs": (
+            f"{is_admin} OR owner_id IS NULL OR owner_id IN "
+            f"(SELECT id FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
+        ),
+        "tickets": (
+            f"{is_admin} OR requester_email IS NULL OR requester_email IN "
+            f"(SELECT email FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
+        ),
+    }
+    for table, predicate in policies.items():
+        conn.execute(text(f"ALTER TABLE {ORG_SCHEMA}.{table} ENABLE ROW LEVEL SECURITY"))
+        conn.execute(text(f"ALTER TABLE {ORG_SCHEMA}.{table} FORCE ROW LEVEL SECURITY"))
+        conn.execute(text(f"DROP POLICY IF EXISTS {table}_select ON {ORG_SCHEMA}.{table}"))
+        conn.execute(
+            text(
+                f"CREATE POLICY {table}_select ON {ORG_SCHEMA}.{table} "
+                f"FOR SELECT USING ({predicate})"
+            )
+        )
+
+
 def _reset_conversations(conn: Connection) -> None:
     exists = conn.execute(text("SELECT to_regclass('public.conversations')")).scalar()
     if exists:
@@ -306,6 +369,7 @@ def seed(engine: Engine, *, reset: bool = False) -> dict[str, int]:
             tickets,
         )
         _ensure_readonly_role(conn)
+        _create_read_views(conn)
 
     if reset:
         with engine.begin() as conn:
