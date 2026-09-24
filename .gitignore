@@ -37,3 +37,6 @@ next-env.d.ts
 # Local data / compose volumes
 db-data/
 redis-data/
+
+# Generated eval baselines
+backend/eval_baselines/

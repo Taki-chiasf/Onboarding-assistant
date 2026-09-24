@@ -132,6 +132,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  eval:
+    build:
+      context: ./backend
+    profiles: ["eval"]
+    entrypoint: ["python", "-m", "app.eval.eval_run"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mistral}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   tempo:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yaml"]
