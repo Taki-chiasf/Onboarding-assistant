@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     mistral_api_key: str = ""
 
+    llm_provider: str = "mistral"
+    ollama_base_url: str = "http://localhost:11434"
+
     mock_oidc: int = 1
     dev_principal_sub: str = "dev-user"
     dev_principal_email: str = "dev@example.com"

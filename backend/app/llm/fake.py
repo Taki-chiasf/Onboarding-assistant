@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 
-from app.llm.provider import ChatMessage
+from app.llm.provider import ChatMessage, JsonSchema
 
 ChatFn = Callable[[str, Sequence[ChatMessage]], str]
 
@@ -23,9 +23,11 @@ class FakeProvider:
         responses: Mapping[str, str] | None = None,
         *,
         chat_fn: ChatFn | None = None,
+        structured: Mapping[str, str] | None = None,
         default: str = "",
     ) -> None:
         self._responses = dict(responses or {})
+        self._structured = dict(structured or {})
         self._chat_fn = chat_fn
         self._default = default
 
@@ -34,8 +36,18 @@ class FakeProvider:
             return self._chat_fn(model, messages)
         return self._responses.get(model, self._default)
 
+    def _structured_chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
+        if model in self._structured:
+            return self._structured[model]
+        return self._chat(model, messages)
+
     async def chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
         return self._chat(model, messages)
+
+    async def chat_structured(
+        self, model: str, messages: Sequence[ChatMessage], schema: JsonSchema
+    ) -> str:
+        return self._structured_chat(model, messages)
 
     async def stream(self, model: str, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
         for token in self._tokenize(self._chat(model, messages)):

@@ -20,11 +20,26 @@ export type SqlDetail = {
   latency_ms: number;
 };
 
+export type Surface = "rag-docs" | "rag-code" | "text-to-sql";
+
+export type ClarifyOption = {
+  surface: Surface;
+  label: string;
+};
+
+export type Clarify = {
+  kind: "surface" | "interpretation";
+  question: string;
+  options: ClarifyOption[];
+};
+
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
   sql?: SqlDetail;
+  clarify?: Clarify;
+  query?: string;
   model?: string;
   promptVersion?: string;
   traceId?: string;
@@ -41,9 +56,11 @@ type Principal = {
   email: string;
   dept: string;
   role: string;
-};async function readSse(
+};
+
+async function readSse(
   body: ReadableStream<Uint8Array>,
-  onEvent: (event: string, data: Record<string, unknown>) => void,
+  onEvent: (event: string, data: Record<string, unknown>) => void
 ) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -91,7 +108,7 @@ function SourcePanel({
             onClick={() => setTab(key)}
             className={cn(
               "rounded-t px-2 py-1 capitalize",
-              tab === key ? "bg-muted font-medium" : "text-muted-foreground",
+              tab === key ? "bg-muted font-medium" : "text-muted-foreground"
             )}
           >
             {key === "trace" ? "Raw trace" : key}
@@ -177,19 +194,23 @@ export function Chat({ principal }: { principal: Principal }) {
     setDraft((prev) => (prev ? update(prev) : prev));
   }
 
-  async function send() {
-    const query = input.trim();
+  async function send(pinned?: { query: string; surface: Surface }) {
+    const query = (pinned?.query ?? input).trim();
     if (!query || busy) return;
-    setInput("");
+    if (!pinned) setInput("");
     setBusy(true);
     setMessages((prev) => [...prev, { role: "user", content: query }]);
-    setDraft({ role: "assistant", content: "", sources: [] });
+    setDraft({ role: "assistant", content: "", sources: [], query });
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, conversation_id: conversationId }),
+        body: JSON.stringify({
+          query,
+          conversation_id: conversationId,
+          surface: pinned?.surface,
+        }),
       });
       if (!res.ok || !res.body) {
         throw new Error("request failed");
@@ -204,12 +225,15 @@ export function Chat({ principal }: { principal: Principal }) {
           applyAssistant((m) => ({ ...m, sources: (data.sources as Source[]) ?? [] }));
         } else if (event === "sql") {
           applyAssistant((m) => ({ ...m, sql: data as unknown as SqlDetail }));
+        } else if (event === "clarify") {
+          applyAssistant((m) => ({ ...m, clarify: data as unknown as Clarify }));
         } else if (event === "token") {
           applyAssistant((m) => ({ ...m, content: m.content + String(data.text ?? "") }));
         } else if (event === "done") {
           applyAssistant((m) => ({
             ...m,
             content: String(data.answer ?? m.content),
+            clarify: (data.clarify as Clarify | undefined) ?? m.clarify,
             model: String(data.model ?? ""),
             promptVersion: String(data.prompt_version ?? ""),
             traceId: String(data.trace_id ?? ""),
@@ -245,7 +269,7 @@ export function Chat({ principal }: { principal: Principal }) {
               onClick={() => openConversation(conversation.id)}
               className={cn(
                 "block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-muted",
-                conversation.id === conversationId && "bg-muted font-medium",
+                conversation.id === conversationId && "bg-muted font-medium"
               )}
             >
               {conversation.title ?? "Untitled"}
@@ -272,12 +296,28 @@ export function Chat({ principal }: { principal: Principal }) {
               <div
                 className={cn(
                   "max-w-[80%] rounded-lg px-4 py-2 text-sm",
-                  message.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "border bg-card",
+                  message.role === "user" ? "bg-primary text-primary-foreground" : "border bg-card"
                 )}
               >
                 <p className="whitespace-pre-wrap">{message.content || "…"}</p>
+                {message.role === "assistant" && message.clarify && message.query && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {message.clarify.options.map((option) => (
+                      <Button
+                        key={option.surface}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          void send({ query: message.query ?? "", surface: option.surface })
+                        }
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                )}
                 {message.role === "assistant" &&
                   ((message.sources && message.sources.length > 0) || message.sql) && (
                     <SourcePanel

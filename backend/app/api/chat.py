@@ -15,11 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
-from app.llm.client import get_provider
-from app.llm.models import load_models
+from app.core.config import get_settings
+from app.llm.client import get_provider, get_router_provider
+from app.llm.models import ModelConfig, load_models
 from app.models import Conversation, Message
-from app.rag.orchestrator import ChatOrchestrator
+from app.rag.answer import RagAnswerer
 from app.rag.retrieval import Retriever
+from app.router.dispatcher import ChatDispatcher
+from app.router.router import IntentRouter
+from app.router.schema import Surface
+from app.text_to_sql.answer import SqlAnswerer
+from app.text_to_sql.executor import SqlExecutor
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -27,9 +33,17 @@ router = APIRouter(prefix="/api", tags=["chat"])
 class ChatRequest(BaseModel):
     query: str
     conversation_id: uuid.UUID | None = None
+    surface: Surface | None = None
 
 
-def _build_orchestrator(engine: AsyncEngine) -> ChatOrchestrator:
+def _router_model(models: ModelConfig) -> str:
+    if get_settings().llm_provider == "ollama":
+        return models.models["router_local"]
+    return models.models["router"]
+
+
+def _build_orchestrator(engine: AsyncEngine) -> ChatDispatcher:
+    settings = get_settings()
     provider = get_provider()
     models = load_models()
 
@@ -37,15 +51,24 @@ def _build_orchestrator(engine: AsyncEngine) -> ChatOrchestrator:
         return await provider.embed(models.models["embed"], texts)
 
     retriever = Retriever(engine, embed)
-    return ChatOrchestrator(engine, provider, models, retriever)
+    rag = RagAnswerer(engine, provider, models, retriever)
+    executor = SqlExecutor(
+        engine,
+        readonly_role=settings.sql_readonly_role,
+        statement_timeout_ms=settings.sql_statement_timeout_ms,
+        max_rows=settings.sql_max_rows,
+    )
+    sql = SqlAnswerer(engine, provider, models, executor)
+    intent_router = IntentRouter(get_router_provider(), _router_model(models))
+    return ChatDispatcher(engine, intent_router, rag, sql)
 
 
-def get_chat_orchestrator(request: Request) -> ChatOrchestrator:
+def get_chat_orchestrator(request: Request) -> ChatDispatcher:
     return _build_orchestrator(request.app.state.engine)
 
 
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
-OrchestratorDep = Annotated[ChatOrchestrator, Depends(get_chat_orchestrator)]
+OrchestratorDep = Annotated[ChatDispatcher, Depends(get_chat_orchestrator)]
 
 
 def _sse(event: str, data: object) -> str:
@@ -61,7 +84,7 @@ async def chat(
 ) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         async for event in orchestrator.stream(
-            payload.query, principal, payload.conversation_id
+            payload.query, principal, payload.conversation_id, surface=payload.surface
         ):
             yield _sse(str(event["event"]), event["data"])
 

@@ -1,17 +1,21 @@
 from collections.abc import AsyncIterator, Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 from mistralai.client import Mistral
 from mistralai.client.models import (
     AssistantMessage,
     DocumentURLChunk,
     File,
+    JSONSchema,
     OCRResponse,
+    ResponseFormat,
     SystemMessage,
     TextChunk,
     UserMessage,
 )
 from pydantic import BaseModel
+
+JsonSchema = dict[str, Any]
 
 
 class ChatMessage(BaseModel):
@@ -23,6 +27,10 @@ class ChatProvider(Protocol):
     async def chat(self, model: str, messages: Sequence[ChatMessage]) -> str: ...
 
     def stream(self, model: str, messages: Sequence[ChatMessage]) -> AsyncIterator[str]: ...
+
+    async def chat_structured(
+        self, model: str, messages: Sequence[ChatMessage], schema: JsonSchema
+    ) -> str: ...
 
 
 def _to_sdk_message(message: ChatMessage) -> AssistantMessage | SystemMessage | UserMessage:
@@ -63,6 +71,23 @@ class MistralProvider:
             text = _extract_text(delta.content if delta else None)
             if text:
                 yield text
+
+    async def chat_structured(
+        self, model: str, messages: Sequence[ChatMessage], schema: JsonSchema
+    ) -> str:
+        sdk_messages = [_to_sdk_message(message) for message in messages]
+        response = await self._client.chat.complete_async(
+            model=model,
+            messages=sdk_messages,
+            response_format=ResponseFormat(
+                type="json_schema",
+                json_schema=JSONSchema(
+                    name="structured_output", schema_definition=schema, strict=True
+                ),
+            ),
+        )
+        message = response.choices[0].message
+        return _extract_text(message.content if message else None)
 
     async def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
         response = await self._client.embeddings.create_async(model=model, inputs=list(texts))

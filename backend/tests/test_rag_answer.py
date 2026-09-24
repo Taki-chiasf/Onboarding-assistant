@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -7,8 +7,8 @@ import pytest
 from app.auth.principal import Principal
 from app.llm.models import ModelConfig
 from app.llm.provider import MistralProvider
-from app.rag import orchestrator as orchestrator_mod
-from app.rag.orchestrator import ChatOrchestrator
+from app.rag import answer as answer_mod
+from app.rag.answer import RagAnswerer
 from app.rag.retrieval import RetrievedChunk, Retriever
 
 
@@ -38,8 +38,18 @@ def _chunk() -> RetrievedChunk:
 class _FakeRetriever:
     def __init__(self, chunks: list[RetrievedChunk]) -> None:
         self._chunks = chunks
+        self.source_types: Sequence[str] | None = None
 
-    async def retrieve(self, query: str, *, dept: str, role: str) -> list[RetrievedChunk]:
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        dept: str,
+        role: str,
+        source_types: Sequence[str] | None = None,
+        **_: object,
+    ) -> list[RetrievedChunk]:
+        self.source_types = source_types
         return self._chunks
 
 
@@ -79,27 +89,29 @@ def _patch_session_factory(monkeypatch: pytest.MonkeyPatch, added: list[Any]) ->
     def factory() -> _FakeSession:
         return _FakeSession(added)
 
-    monkeypatch.setattr(
-        orchestrator_mod, "async_sessionmaker", lambda engine, expire_on_commit: factory
-    )
+    monkeypatch.setattr(answer_mod, "async_sessionmaker", lambda engine, expire_on_commit: factory)
 
 
-def _orchestrator(provider: _FakeProvider, chunks: list[RetrievedChunk]) -> ChatOrchestrator:
-    return ChatOrchestrator(
+def _answerer(
+    provider: _FakeProvider, chunks: list[RetrievedChunk]
+) -> tuple[RagAnswerer, _FakeRetriever]:
+    retriever = _FakeRetriever(chunks)
+    answerer = RagAnswerer(
         MagicMock(),
         cast(MistralProvider, provider),
         _models(),
-        cast(Retriever, _FakeRetriever(chunks)),
+        cast(Retriever, retriever),
     )
+    return answerer, retriever
 
 
 async def test_stream_cite_or_die_without_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     added: list[Any] = []
     _patch_session_factory(monkeypatch, added)
     provider = _FakeProvider([])
-    orchestrator = _orchestrator(provider, [])
+    answerer, _ = _answerer(provider, [])
 
-    events = [e async for e in orchestrator.stream("hello", _principal())]
+    events = [e async for e in answerer.stream("hello", _principal())]
 
     assert [e["event"] for e in events] == ["sources", "token", "done"]
     assert events[1]["data"]["text"] == "I don't know"
@@ -113,9 +125,9 @@ async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.Monkey
     added: list[Any] = []
     _patch_session_factory(monkeypatch, added)
     provider = _FakeProvider(["16 ", "weeks"])
-    orchestrator = _orchestrator(provider, [_chunk()])
+    answerer, _ = _answerer(provider, [_chunk()])
 
-    events = [e async for e in orchestrator.stream("how much leave?", _principal())]
+    events = [e async for e in answerer.stream("how much leave?", _principal())]
 
     assert [e["event"] for e in events] == ["sources", "token", "token", "done"]
     assert events[0]["data"]["sources"][0]["id"] == "chunk-1"
@@ -129,3 +141,13 @@ async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.Monkey
     assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
     assert len(assistant) == 1
     assert assistant[0].content == "16 weeks"
+
+
+async def test_stream_passes_source_type_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    answerer, retriever = _answerer(_FakeProvider(["ok"]), [_chunk()])
+
+    _ = [e async for e in answerer.stream("deploy", _principal(), source_types=("engineering",))]
+
+    assert retriever.source_types == ("engineering",)

@@ -1,14 +1,17 @@
-"""Chat orchestration: retrieve, ground, stream, and record.
+"""Document answer path: retrieve, ground, stream, and record.
 
-This is the RAG answer path. The intent router and text-to-SQL branch will slot
-into the same shape later; for now every query routes to document retrieval.
+Streams ``sources`` once, then ``token`` per model token, then ``done`` with the
+final answer and provenance. The streaming shape is shared with the SQL path so
+the dispatcher can forward either one to the client unchanged. A ``source_types``
+restriction narrows retrieval to a subset of the corpus (used for
+code-oriented questions).
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import asdict
 from decimal import Decimal
 from time import perf_counter
@@ -21,7 +24,7 @@ from app.auth.principal import Principal
 from app.core.redact import redact_pii
 from app.llm.models import ModelConfig
 from app.llm.pricing import compute_cost, estimate_tokens
-from app.llm.provider import MistralProvider
+from app.llm.provider import ChatProvider
 from app.models import Conversation, Message
 from app.prompts.loader import prompt_version
 from app.rag.cost import record_cost
@@ -34,11 +37,11 @@ tracer = trace.get_tracer(__name__)
 GROUNDING_PROMPT = "grounding"
 
 
-class ChatOrchestrator:
+class RagAnswerer:
     def __init__(
         self,
         engine: AsyncEngine,
-        provider: MistralProvider,
+        provider: ChatProvider,
         models: ModelConfig,
         retriever: Retriever,
     ) -> None:
@@ -49,7 +52,12 @@ class ChatOrchestrator:
         self._session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def stream(
-        self, query: str, principal: Principal, conversation_id: uuid.UUID | None = None
+        self,
+        query: str,
+        principal: Principal,
+        conversation_id: uuid.UUID | None = None,
+        *,
+        source_types: Sequence[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         trace_id = uuid.uuid4().hex
         started = perf_counter()
@@ -60,12 +68,14 @@ class ChatOrchestrator:
         with tracer.start_as_current_span("chat") as span:
             span.set_attribute("user.dept", principal.dept)
             span.set_attribute("user.role", principal.role)
+            if source_types is not None:
+                span.set_attribute("retrieve.source_types", list(source_types))
 
             conv_id = await self._record_user_message(query, principal, trace_id, conversation_id)
 
             with tracer.start_as_current_span("retrieve"):
                 chunks = await self._retriever.retrieve(
-                    query, dept=principal.dept, role=principal.role
+                    query, dept=principal.dept, role=principal.role, source_types=source_types
                 )
 
             sources = to_sources(chunks)

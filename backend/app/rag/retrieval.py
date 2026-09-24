@@ -99,7 +99,7 @@ _VECTOR_SQL = (
     "SELECT id::text AS id, source_uri, section_anchor, content, source_type, "
     "1 - (embedding <=> :query) AS similarity "
     "FROM doc_chunks "
-    "WHERE (1 - (embedding <=> :query)) >= :threshold AND {acl} "
+    "WHERE (1 - (embedding <=> :query)) >= :threshold AND {scope} "
     "ORDER BY embedding <=> :query LIMIT :limit"
 )
 
@@ -107,7 +107,7 @@ _FTS_SQL = (
     "SELECT id::text AS id, source_uri, section_anchor, content, source_type, "
     "ts_rank(search_vector, websearch_to_tsquery('english', :query)) AS similarity "
     "FROM doc_chunks "
-    "WHERE search_vector @@ websearch_to_tsquery('english', :query) AND {acl} "
+    "WHERE search_vector @@ websearch_to_tsquery('english', :query) AND {scope} "
     "ORDER BY similarity DESC LIMIT :limit"
 )
 
@@ -115,23 +115,32 @@ _TRGM_SQL = (
     "SELECT id::text AS id, source_uri, section_anchor, content, source_type, "
     "similarity(content, :query) AS similarity "
     "FROM doc_chunks "
-    "WHERE content % :query AND {acl} "
+    "WHERE content % :query AND {scope} "
     "ORDER BY similarity DESC LIMIT :limit"
 )
 
+_SOURCE_TYPE_FILTER = "source_type = ANY(:source_types)"
 
-def _vector_stmt() -> TextClause:
-    return text(_VECTOR_SQL.format(acl=acl_fragment())).bindparams(
+
+def _scope(restrict_types: bool) -> str:
+    scope = acl_fragment()
+    if restrict_types:
+        scope = f"({scope}) AND {_SOURCE_TYPE_FILTER}"
+    return scope
+
+
+def _vector_stmt(restrict_types: bool = False) -> TextClause:
+    return text(_VECTOR_SQL.format(scope=_scope(restrict_types))).bindparams(
         bindparam("query", type_=Vector(EMBEDDING_DIM))
     )
 
 
-def _fts_stmt() -> TextClause:
-    return text(_FTS_SQL.format(acl=acl_fragment()))
+def _fts_stmt(restrict_types: bool = False) -> TextClause:
+    return text(_FTS_SQL.format(scope=_scope(restrict_types)))
 
 
-def _trgm_stmt() -> TextClause:
-    return text(_TRGM_SQL.format(acl=acl_fragment()))
+def _trgm_stmt(restrict_types: bool = False) -> TextClause:
+    return text(_TRGM_SQL.format(scope=_scope(restrict_types)))
 
 
 class Retriever:
@@ -152,25 +161,29 @@ class Retriever:
         *,
         dept: str,
         role: str,
+        source_types: Sequence[str] | None = None,
         top_k: int = DEFAULT_TOP_K,
         threshold: float = DEFAULT_THRESHOLD,
         limit: int = DEFAULT_CANDIDATE_LIMIT,
     ) -> list[RetrievedChunk]:
         embedding = (await self._embed([query]))[0]
+        restrict_types = bool(source_types)
         params: dict[str, object] = {
             "dept": f"dept:{dept}",
             "role": f"role:{role}",
             "limit": limit,
         }
+        if restrict_types:
+            params["source_types"] = list(source_types) if source_types else []
 
         async with self._engine.connect() as conn:
             vector = await self._run(
                 conn,
-                _vector_stmt(),
+                _vector_stmt(restrict_types),
                 params | {"query": embedding, "threshold": threshold},
             )
-            fts = await self._run(conn, _fts_stmt(), params | {"query": query})
-            trgm = await self._run(conn, _trgm_stmt(), params | {"query": query})
+            fts = await self._run(conn, _fts_stmt(restrict_types), params | {"query": query})
+            trgm = await self._run(conn, _trgm_stmt(restrict_types), params | {"query": query})
 
         pool = fuse_and_rank(vector, fts, trgm, top_k=min(3 * top_k, limit))
         ranked = await self._reranker.rerank(query, pool)
