@@ -1,22 +1,29 @@
 @import "tailwindcss";
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.45 0.15 260);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Surfaces and ink, after mistral.ai light theme */
+  --background: #ffffff;
+  --foreground: #111111;
+  --card: #ffffff;
+  --card-foreground: #111111;
+  --primary: #111111;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f3;
+  --secondary-foreground: #111111;
+  --muted: #f5f5f3;
+  --muted-foreground: #71706c;
+  --accent: #efefec;
+  --accent-foreground: #111111;
+  --destructive: #e61300;
+  --border: #e6e6e3;
+  --input: #e6e6e3;
+  --ring: #111111;
+  /* Warm pixel ramp, after the Mistral logotype */
+  --brand-yellow: #ffaf01;
+  --brand-orange: #ff8204;
+  --brand-vermilion: #fa500f;
+  --brand-red: #e61300;
+  --brand-crimson: #c4001d;
 }
 
 @theme inline {
@@ -36,9 +43,113 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-brand-yellow: var(--brand-yellow);
+  --color-brand-orange: var(--brand-orange);
+  --color-brand-vermilion: var(--brand-vermilion);
+  --color-brand-red: var(--brand-red);
+  --color-brand-crimson: var(--brand-crimson);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", monospace;
+  /* Soft offset elevation for panels that float above the page ground */
+  --shadow-lift:
+    0 1px 2px rgb(17 17 17 / 0.04), 0 8px 24px rgb(17 17 17 / 0.05);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
+@layer base {
+  * {
+    border-color: var(--border);
+    scrollbar-width: thin;
+    scrollbar-color: #d8d8d4 transparent;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--brand-orange);
+    color: #111111;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d8d8d4;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Hard-blink pixel cursor shown while a turn streams. */
+@keyframes pixel-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+.pixel-cube {
+  animation: pixel-blink 0.9s infinite;
+}
+
+/* Warm ramp gradient, yellow through crimson, for hairline accents. */
+.bg-ramp {
+  background-image: linear-gradient(
+    90deg,
+    #ffaf01,
+    #ff8204,
+    #fa500f,
+    #e61300,
+    #c4001d
+  );
+}
+
+.bg-ramp-v {
+  background-image: linear-gradient(
+    180deg,
+    #ffaf01,
+    #ff8204,
+    #fa500f,
+    #e61300,
+    #c4001d
+  );
+}
+
+/* Ambient warm wash grounding hero moments on the white field.
+   Percentage ellipses size to their box, so the gradient never clips. */
+.ambient-wash {
+  background:
+    radial-gradient(
+      ellipse 46% 34% at 50% 36%,
+      rgb(255 130 4 / 0.06),
+      transparent 72%
+    ),
+    radial-gradient(
+      ellipse 30% 16% at 50% 18%,
+      rgb(230 19 0 / 0.035),
+      transparent 72%
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-cube {
+    animation: none;
+    opacity: 0.6;
+  }
 }

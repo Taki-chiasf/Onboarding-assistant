@@ -1,5 +1,6 @@
 # Agent/editor state
 .opencode/
+.impeccable/
 
 # Local environment + secrets
 .envrc
