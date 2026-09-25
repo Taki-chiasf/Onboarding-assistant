@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
@@ -93,9 +93,9 @@ async def chat(
 
 @router.get("/conversations")
 async def list_conversations(request: Request, principal: PrincipalDep) -> list[dict[str, object]]:
-    engine = request.app.state.engine
-    async with engine.connect() as conn:
-        result = await conn.execute(
+    factory = async_sessionmaker(request.app.state.engine, expire_on_commit=False)
+    async with factory() as session:
+        result = await session.execute(
             select(Conversation)
             .where(Conversation.user_id == principal.sub)
             .order_by(Conversation.created_at.desc())
@@ -115,9 +115,9 @@ async def list_conversations(request: Request, principal: PrincipalDep) -> list[
 async def get_messages(
     conversation_id: uuid.UUID, request: Request, principal: PrincipalDep
 ) -> list[dict[str, object]]:
-    engine = request.app.state.engine
-    async with engine.connect() as conn:
-        result = await conn.execute(
+    factory = async_sessionmaker(request.app.state.engine, expire_on_commit=False)
+    async with factory() as session:
+        result = await session.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.created_at.asc())
