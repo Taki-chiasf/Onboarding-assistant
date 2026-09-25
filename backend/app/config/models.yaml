@@ -1,4 +1,8 @@
 provider: mistral
+
+# Preferred model per role. These stay the first choice; fallbacks below are only
+# reached when the provider rejects one, which happens on subscription tiers that
+# do not grant access to every model.
 models:
   grounding: mistral-large-2512
   router: mistral-small-2603
@@ -11,3 +15,31 @@ models:
   embed: mistral-embed
   ocr: mistral-ocr-4-0
   moderation: mistral-moderation-2603
+
+# Ordered stand-ins, tried only after the provider rejects the preferred model.
+# Restricted tiers expose the open-weight models and reject the hosted ones.
+#
+# ocr has no stand-in: every OCR model reports a zero request ceiling on a
+# restricted tier, so PDF ingestion needs tier access rather than a fallback.
+# moderation and embed already serve on a restricted tier and need none.
+fallbacks:
+  router:
+    - ministral-8b-2512
+    - ministral-3b-2512
+  condenser:
+    - ministral-8b-2512
+    - ministral-3b-2512
+  grounding:
+    - ministral-14b-2512
+    - open-mistral-nemo
+  sql_builder:
+    - codestral-2508
+    - ministral-8b-2512
+  rag_code:
+    - codestral-2508
+  judge:
+    - ministral-14b-2512
+    - ministral-8b-2512
+  escalation:
+    - ministral-8b-2512
+    - ministral-3b-2512

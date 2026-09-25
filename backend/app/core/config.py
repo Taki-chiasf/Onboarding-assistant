@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     llm_provider: str = "mistral"
     ollama_base_url: str = "http://localhost:11434"
 
+    # Attempts per model call, and the pause before the first retry. A key with a
+    # real per-minute ceiling needs to wait it out; one locked out of a model does
+    # not, and is handled by moving to a stand-in instead.
+    llm_max_attempts: int = 4
+    llm_retry_base_delay_s: float = 2.0
+    llm_retry_max_delay_s: float = 30.0
+
     mock_oidc: int = 1
     dev_principal_sub: str = "dev-user"
     dev_principal_email: str = "dev@example.com"

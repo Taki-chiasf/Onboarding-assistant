@@ -63,6 +63,9 @@ class LocalProvider:
             payload["format"] = schema
         return payload
 
+    def effective_model(self, model: str) -> str:
+        return model
+
     async def chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
         response = await self._client.post(
             "/api/chat", json=self._payload(model, messages, stream=False)

@@ -36,4 +36,5 @@ async def run_ingest() -> dict[str, int]:
         "updated": stats.updated,
         "skipped": stats.skipped,
         "embedded": stats.embedded,
+        "failed": stats.failed,
     }

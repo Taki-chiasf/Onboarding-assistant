@@ -106,14 +106,15 @@ class RagAnswerer:
 
             latency_ms = int((perf_counter() - started) * 1000)
             tokens_out = estimate_tokens(answer)
+            served_model = self._provider.effective_model(grounding_model)
             cost: Decimal = (
-                compute_cost(grounding_model, tokens_in, tokens_out) if chunks else Decimal("0")
+                compute_cost(served_model, tokens_in, tokens_out) if chunks else Decimal("0")
             )
             message_id = await self._record_answer(
                 conv_id,
                 principal,
                 answer,
-                grounding_model,
+                served_model,
                 version,
                 trace_id,
                 latency_ms,
@@ -131,7 +132,7 @@ class RagAnswerer:
                     "answer": answer,
                     "sources": [asdict(s) for s in sources],
                     "trace_id": trace_id,
-                    "model": grounding_model,
+                    "model": served_model,
                     "prompt_version": version,
                     "latency_ms": latency_ms,
                     "tokens_in": tokens_in,

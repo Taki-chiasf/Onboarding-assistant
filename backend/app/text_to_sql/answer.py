@@ -149,17 +149,17 @@ class SqlAnswerer:
             latency_ms = int((perf_counter() - started) * 1000)
             tokens_out = estimate_tokens(answer)
             sql_tokens_out = estimate_tokens(built.sql)
-            builder_cost = compute_cost(
-                self._models.models["sql_builder"], built.tokens_in, sql_tokens_out
-            )
-            summary_cost = compute_cost(summary_model, summary_tokens_in, tokens_out)
+            builder_model = self._provider.effective_model(self._models.models["sql_builder"])
+            served_model = self._provider.effective_model(summary_model)
+            builder_cost = compute_cost(builder_model, built.tokens_in, sql_tokens_out)
+            summary_cost = compute_cost(served_model, summary_tokens_in, tokens_out)
             cost = builder_cost + summary_cost
 
             message_id = await self._record_answer(
                 conv_id,
                 principal,
                 answer,
-                summary_model,
+                served_model,
                 version,
                 trace_id,
                 latency_ms,
@@ -184,8 +184,8 @@ class SqlAnswerer:
                     "truncated": result.truncated,
                     "sql_latency_ms": result.latency_ms,
                     "trace_id": trace_id,
-                    "model": summary_model,
-                    "sql_model": self._models.models["sql_builder"],
+                    "model": served_model,
+                    "sql_model": builder_model,
                     "prompt_version": version,
                     "sql_prompt_version": built.prompt_version,
                     "latency_ms": latency_ms,

@@ -8,6 +8,7 @@ changed, which keeps re-runs cheap and static documents cached.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,8 @@ from app.models import DocChunk
 from app.rag import Chunk, chunk_id, chunk_markdown
 
 CORPUS_ROOT = Path(__file__).resolve().parents[2] / "seed_corpus"
+
+logger = logging.getLogger(__name__)
 
 SOURCE_TYPE_BY_CATEGORY: dict[str, str] = {
     "policies": "policy",
@@ -63,6 +66,7 @@ class IngestStats:
     updated: int
     skipped: int
     embedded: int
+    failed: int = 0
 
 
 def source_type_for(category: str) -> str:
@@ -143,15 +147,21 @@ async def ingest_files(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as session:
         for corpus_file in files:
-            if corpus_file.path.suffix == ".pdf":
-                markdown = await ocr_pdf_markdown(
-                    provider,
-                    ocr_model,
-                    corpus_file.path.name,
-                    corpus_file.path.read_bytes(),
-                )
-            else:
-                markdown = corpus_file.path.read_text(encoding="utf-8")
+            try:
+                if corpus_file.path.suffix == ".pdf":
+                    markdown = await ocr_pdf_markdown(
+                        provider,
+                        ocr_model,
+                        corpus_file.path.name,
+                        corpus_file.path.read_bytes(),
+                    )
+                else:
+                    markdown = corpus_file.path.read_text(encoding="utf-8")
+            except Exception:
+                # One unreadable document must not abandon the rest of the corpus.
+                logger.exception("failed to read corpus file: %s", corpus_file.path.name)
+                stats.failed += 1
+                continue
             chunks = chunk_file(corpus_file, markdown)
 
             result = await session.execute(

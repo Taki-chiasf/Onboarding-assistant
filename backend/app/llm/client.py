@@ -2,12 +2,19 @@ from functools import lru_cache
 
 from app.core.config import get_settings
 from app.llm.local import LocalProvider
+from app.llm.models import load_models
 from app.llm.provider import ChatProvider, MistralProvider
+from app.llm.resolver import ModelResolver
+
+
+@lru_cache
+def get_resolver() -> ModelResolver:
+    return ModelResolver(load_models())
 
 
 @lru_cache
 def get_provider() -> MistralProvider:
-    return MistralProvider.from_api_key(get_settings().mistral_api_key)
+    return MistralProvider.from_api_key(get_settings().mistral_api_key, get_resolver())
 
 
 @lru_cache

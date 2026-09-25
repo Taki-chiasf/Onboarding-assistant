@@ -58,6 +58,9 @@ class _FakeProvider:
         self._tokens = tokens
         self.stream_calls = 0
 
+    def effective_model(self, model: str) -> str:
+        return model
+
     async def stream(self, model: str, messages: list[object]) -> AsyncIterator[str]:
         self.stream_calls += 1
         for token in self._tokens:

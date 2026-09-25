@@ -1,4 +1,5 @@
 from functools import lru_cache
+from itertools import chain
 from pathlib import Path
 
 import yaml
@@ -10,13 +11,14 @@ MODELS_PATH = Path(__file__).resolve().parents[1] / "config" / "models.yaml"
 class ModelConfig(BaseModel):
     provider: str
     models: dict[str, str]
+    fallbacks: dict[str, list[str]] = {}
 
 
 @lru_cache
 def load_models() -> ModelConfig:
     data = yaml.safe_load(MODELS_PATH.read_text(encoding="utf-8"))
     config = ModelConfig.model_validate(data)
-    for model_id in config.models.values():
+    for model_id in (*config.models.values(), *chain.from_iterable(config.fallbacks.values())):
         if model_id.endswith("-latest"):
             raise ValueError(f"dated model id required, got: {model_id}")
     return config

@@ -214,3 +214,58 @@ async def test_ingest_files_skips_unchanged(
     assert stats.updated == 0
     assert stats.skipped == len(chunks)
     assert stats.embedded == 0
+
+
+def _pdf_file(tmp_path: Path) -> CorpusFile:
+    path = tmp_path / "pdfs" / "guide.pdf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"%PDF-1.4")
+    return CorpusFile(source_uri="file:pdfs/guide.pdf", source_type="policy", path=path)
+
+
+async def test_ingest_continues_past_an_unreadable_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _FakeSession([])
+    monkeypatch.setattr(
+        pipeline_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit: (lambda: session),
+    )
+    provider = _fake_provider()
+    provider.ocr_pdf = AsyncMock(side_effect=RuntimeError("ocr unavailable"))
+
+    stats = await ingest_files(
+        MagicMock(),
+        provider,
+        "mistral-embed",
+        "mistral-ocr-4-0",
+        [_pdf_file(tmp_path), _markdown_file(tmp_path)],
+    )
+
+    assert stats.files == 2
+    assert stats.failed == 1
+    assert stats.inserted > 0
+    assert session.committed
+
+
+async def test_ingest_marks_a_file_unreadable_when_it_cannot_be_decoded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _FakeSession([])
+    monkeypatch.setattr(
+        pipeline_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit: (lambda: session),
+    )
+    path = tmp_path / "policies" / "bad.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe\x00binary")
+    corpus_file = CorpusFile(source_uri="file:policies/bad.md", source_type="policy", path=path)
+
+    stats = await ingest_files(
+        MagicMock(), _fake_provider(), "mistral-embed", "mistral-ocr-4-0", [corpus_file]
+    )
+
+    assert stats.failed == 1
+    assert stats.inserted == 0

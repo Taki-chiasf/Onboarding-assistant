@@ -41,6 +41,9 @@ class FakeProvider:
             return self._structured[model]
         return self._chat(model, messages)
 
+    def effective_model(self, model: str) -> str:
+        return model
+
     async def chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
         return self._chat(model, messages)
 
