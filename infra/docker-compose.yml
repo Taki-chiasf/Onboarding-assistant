@@ -48,6 +48,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
       REDIS_URL: redis://redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mistral}
       DEV_PRINCIPAL_SUB: ${DEV_PRINCIPAL_SUB:-dev-user}
       DEV_PRINCIPAL_EMAIL: ${DEV_PRINCIPAL_EMAIL:-dev@example.com}
       DEV_PRINCIPAL_DEPT: ${DEV_PRINCIPAL_DEPT:-Engineering}
