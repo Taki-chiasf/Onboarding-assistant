@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -28,6 +29,8 @@ from app.text_to_sql.answer import SqlAnswerer
 from app.text_to_sql.executor import SqlExecutor
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -83,10 +86,21 @@ async def chat(
     orchestrator: OrchestratorDep,
 ) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
-        async for event in orchestrator.stream(
-            payload.query, principal, payload.conversation_id, surface=payload.surface
-        ):
-            yield _sse(str(event["event"]), event["data"])
+        try:
+            async for event in orchestrator.stream(
+                payload.query, principal, payload.conversation_id, surface=payload.surface
+            ):
+                yield _sse(str(event["event"]), event["data"])
+        except Exception:
+            # The response has already started by the time a router, builder, or
+            # executor failure surfaces, so the status code cannot change. Send a
+            # terminal error event instead of dropping the connection, which
+            # otherwise looks identical to an empty answer to the client.
+            logger.exception("chat stream failed")
+            yield _sse(
+                "error",
+                {"message": "Something went wrong handling that request. Please try again."},
+            )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -117,6 +131,15 @@ async def get_messages(
 ) -> list[dict[str, object]]:
     factory = async_sessionmaker(request.app.state.engine, expire_on_commit=False)
     async with factory() as session:
+        owned = await session.execute(
+            select(Conversation.id).where(
+                Conversation.id == conversation_id,
+                Conversation.user_id == principal.sub,
+            )
+        )
+        if owned.scalar_one_or_none() is None:
+            # Do not distinguish "not yours" from "does not exist".
+            raise HTTPException(status_code=404, detail="conversation not found")
         result = await session.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)

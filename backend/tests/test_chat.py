@@ -68,6 +68,31 @@ async def test_chat_forwards_pinned_surface(app: FastAPI, client: AsyncClient) -
     assert fake.surfaces == ["rag-docs"]
 
 
+class _FailingOrchestrator:
+    async def stream(
+        self,
+        query: str,
+        principal: object,
+        conversation_id: object = None,
+        *,
+        surface: object = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        yield {"event": "sources", "data": {"conversation_id": "c1", "sources": []}}
+        raise RuntimeError("router exploded")
+
+
+async def test_chat_emits_error_event_on_stream_failure(app: FastAPI, client: AsyncClient) -> None:
+    app.dependency_overrides[get_chat_orchestrator] = lambda: _FailingOrchestrator()
+    try:
+        resp = await client.post("/api/chat", json={"query": "boom"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    assert "event: error" in resp.text
+    assert "Please try again" in resp.text
+
+
 class _StubMessage:
     def __init__(self, detail: dict[str, Any] | None) -> None:
         self.id = uuid.uuid4()
@@ -86,6 +111,9 @@ class _StubResult:
 
     def scalars(self) -> "_StubScalars":
         return _StubScalars(self._rows)
+
+    def scalar_one_or_none(self) -> Any:
+        return self._rows[0] if self._rows else None
 
 
 class _StubScalars:
@@ -130,6 +158,22 @@ async def test_messages_endpoint_returns_evidence(
     row = resp.json()[0]
     assert row["detail"] == detail
     assert row["trace_id"] == "trace-abc"
+
+
+async def test_messages_endpoint_hides_other_users_conversation(
+    app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conversation the caller does not own must not be readable."""
+    app.state.engine = None
+    monkeypatch.setattr(
+        chat_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit=False: lambda: _StubSession([]),
+    )
+
+    resp = await client.get(f"/api/conversations/{uuid.uuid4()}/messages")
+
+    assert resp.status_code == 404
 
 
 _LIVE_DB_URL = os.environ.get("TEST_DATABASE_URL", "")
