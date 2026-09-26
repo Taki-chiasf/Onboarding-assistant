@@ -216,7 +216,7 @@ async def _run_suites(
             # grade an invalid positive control, so they skip retrieval.
             retriever = Retriever(engine, embed) if (corpus_ready and not keyless) else None
             security_summary = await run_security_canaries(
-                router=router, executor=executor, retriever=retriever
+                router=router, executor=executor, retriever=retriever, engine=engine
             )
             if retriever is not None:
                 from app.eval.golden import build_golden_set
@@ -238,9 +238,7 @@ async def _run_suites(
         security=security_summary,
         recall_at_5=recall,
         answer_latencies_s=answer_summary.latencies_s if answer_summary else (),
-        first_token_latencies_s=(
-            answer_summary.first_token_latencies_s if answer_summary else ()
-        ),
+        first_token_latencies_s=(answer_summary.first_token_latencies_s if answer_summary else ()),
         costs_usd=answer_summary.costs_usd if answer_summary else (),
         judge_verdicts=answer_summary.judge_verdicts if answer_summary else (),
         answers=answer_summary.answers if answer_summary else (),

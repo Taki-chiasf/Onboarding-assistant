@@ -16,7 +16,7 @@ from typing import Any
 from app.eval.baseline import BaselineComparison
 from app.eval.gates import GateReport, evaluate_gates, median, percentile
 from app.eval.router_eval import RouterEvalSummary
-from app.eval.security import RAG_KIND, SQL_KIND, SecuritySummary
+from app.eval.security import NO_CONTEXT_KIND, RAG_KIND, SQL_KIND, SecuritySummary
 from app.eval.sql_eval import SqlEvalSummary
 from app.rag.grounding import CITE_OR_DIE
 from app.router.schema import Intent
@@ -43,8 +43,9 @@ def retrieval_metrics(recall_at_5: float) -> dict[str, float]:
 
 
 def security_metrics(summary: SecuritySummary) -> dict[str, float]:
-    access = [r for r in summary.results if r.kind in (SQL_KIND, RAG_KIND)]
-    injection = [r for r in summary.results if r.kind not in (SQL_KIND, RAG_KIND)]
+    access_kinds = (SQL_KIND, NO_CONTEXT_KIND, RAG_KIND)
+    access = [r for r in summary.results if r.kind in access_kinds]
+    injection = [r for r in summary.results if r.kind not in access_kinds]
     metrics: dict[str, float] = {}
     if access:
         metrics["rls_canary_pass_rate"] = sum(1 for r in access if r.passed) / len(access)

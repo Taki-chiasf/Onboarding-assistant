@@ -267,6 +267,36 @@ def _role_setting() -> str:
     return "current_setting('app.principal_role', true)"
 
 
+# Which column on each read view points at a department-owned member, and
+# whether that reference is the member id or email.
+_OWNER_COLUMNS: dict[str, tuple[str, str]] = {
+    "projects": ("lead_id", "id"),
+    "assets": ("assignee_email", "email"),
+    "okrs": ("owner_id", "id"),
+    "tickets": ("requester_email", "email"),
+}
+
+
+def select_policy(table: str) -> str:
+    """Return the deny-by-default SELECT predicate for a read view.
+
+    A caller with no department context sees nothing. Admins see every row.
+    Unassigned rows (a null owner) are shared demo data: visible to any caller
+    with a department context, but never without one, so a context-less read
+    cannot fall through to them.
+    """
+    is_admin = f"{_role_setting()} = 'admin'"
+    dept = _dept_setting()
+    if table == "org_members":
+        return f"{is_admin} OR dept = {dept}"
+    owner_column, member_key = _OWNER_COLUMNS[table]
+    has_context = f"{dept} IS NOT NULL"
+    return (
+        f"{is_admin} OR ({has_context} AND ({owner_column} IS NULL OR {owner_column} IN "
+        f"(SELECT {member_key} FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})))"
+    )
+
+
 def _create_read_views(conn: Connection) -> None:
     """Create security-invoker views and row-level security policies.
 
@@ -279,35 +309,14 @@ def _create_read_views(conn: Connection) -> None:
         conn.execute(text(f"CREATE VIEW public.{name} WITH (security_invoker = true) AS {select}"))
         conn.execute(text(f"GRANT SELECT ON public.{name} TO {READONLY_ROLE}"))
 
-    dept = _dept_setting()
-    is_admin = f"{_role_setting()} = 'admin'"
-    policies: dict[str, str] = {
-        "org_members": f"{is_admin} OR dept = {dept}",
-        "projects": (
-            f"{is_admin} OR lead_id IS NULL OR lead_id IN "
-            f"(SELECT id FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
-        ),
-        "assets": (
-            f"{is_admin} OR assignee_email IS NULL OR assignee_email IN "
-            f"(SELECT email FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
-        ),
-        "okrs": (
-            f"{is_admin} OR owner_id IS NULL OR owner_id IN "
-            f"(SELECT id FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
-        ),
-        "tickets": (
-            f"{is_admin} OR requester_email IS NULL OR requester_email IN "
-            f"(SELECT email FROM {ORG_SCHEMA}.org_members WHERE dept = {dept})"
-        ),
-    }
-    for table, predicate in policies.items():
+    for table in _READ_VIEWS:
         conn.execute(text(f"ALTER TABLE {ORG_SCHEMA}.{table} ENABLE ROW LEVEL SECURITY"))
         conn.execute(text(f"ALTER TABLE {ORG_SCHEMA}.{table} FORCE ROW LEVEL SECURITY"))
         conn.execute(text(f"DROP POLICY IF EXISTS {table}_select ON {ORG_SCHEMA}.{table}"))
         conn.execute(
             text(
                 f"CREATE POLICY {table}_select ON {ORG_SCHEMA}.{table} "
-                f"FOR SELECT USING ({predicate})"
+                f"FOR SELECT USING ({select_policy(table)})"
             )
         )
 

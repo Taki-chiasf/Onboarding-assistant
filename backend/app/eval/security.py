@@ -1,7 +1,8 @@
 """Security canaries.
 
-Three families, run against the live request path they are meant to protect:
+Four families, run against the live request path they are meant to protect:
 cross-department SQL probes that must return zero rows under row-level security,
+context-less probes that must see nothing without a department setting,
 cross-department document queries that must never retrieve chunks outside the
 caller's scope, and prompt-injection prompts that must be refused before any
 retrieval or query is issued. A canary that leaks, or that lets an injection
@@ -12,6 +13,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from app.rag.retrieval import Retriever
 from app.router.router import IntentRouter
 from app.router.schema import Intent
@@ -19,8 +23,12 @@ from app.text_to_sql.executor import SqlExecutor
 from app.text_to_sql.guard import SqlGuardError
 
 SQL_KIND = "sql_access"
+NO_CONTEXT_KIND = "sql_no_context"
 RAG_KIND = "rag_acl"
 INJECTION_KIND = "prompt_injection"
+
+# Read views exposed to the query layer; every one must be empty without context.
+READ_VIEWS: tuple[str, ...] = ("org_members", "projects", "assets", "okrs", "tickets")
 
 
 @dataclass(frozen=True)
@@ -221,6 +229,48 @@ async def run_sql_canaries(
     return results
 
 
+async def run_contextless_canaries(
+    engine: AsyncEngine, views: tuple[str, ...] = READ_VIEWS
+) -> list[CanaryResult]:
+    """Without a department context, every read view must return zero rows.
+
+    This is what makes the read-only role safe on its own: a caller who cannot
+    establish a principal context (no ``app.principal_dept`` setting) must not
+    fall through to shared unassigned rows.
+    """
+    results: list[CanaryResult] = []
+    async with engine.connect() as conn:
+        async with conn.begin():
+            await conn.execute(text("SET LOCAL ROLE app_readonly"))
+            for view in views:
+                name = f"contextless:{view}"
+                try:
+                    count = (await conn.execute(text(f"SELECT count(*) FROM {view}"))).scalar_one()
+                except Exception as exc:  # noqa: BLE001 - a probe that did not run proves nothing
+                    results.append(
+                        CanaryResult(
+                            name=name,
+                            kind=NO_CONTEXT_KIND,
+                            passed=False,
+                            detail=f"canary did not run: {exc}",
+                        )
+                    )
+                    continue
+                results.append(
+                    CanaryResult(
+                        name=name,
+                        kind=NO_CONTEXT_KIND,
+                        passed=count == 0,
+                        detail=(
+                            "zero rows without context"
+                            if count == 0
+                            else f"leaked {count} rows without context"
+                        ),
+                    )
+                )
+    return results
+
+
 async def run_rag_canaries(
     retriever: Retriever, canaries: tuple[RagCanary, ...] = RAG_CANARIES
 ) -> list[CanaryResult]:
@@ -285,12 +335,15 @@ async def run_security_canaries(
     router: IntentRouter | None = None,
     executor: SqlExecutor | None = None,
     retriever: Retriever | None = None,
+    engine: AsyncEngine | None = None,
 ) -> SecuritySummary:
     results: list[CanaryResult] = []
     if router is not None:
         results.extend(await run_injection_canaries(router))
     if executor is not None:
         results.extend(await run_sql_canaries(executor))
+    if engine is not None:
+        results.extend(await run_contextless_canaries(engine))
     if retriever is not None:
         results.extend(await run_rag_canaries(retriever))
     return SecuritySummary(results=results)

@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from scripts.seed import (
     ASSET_STATUSES,
     ASSET_TYPES,
@@ -12,6 +14,7 @@ from scripts.seed import (
     generate_projects,
     generate_tickets,
     make_faker,
+    select_policy,
 )
 
 
@@ -101,3 +104,34 @@ def test_tickets_reference_valid_requesters() -> None:
     for ticket in tickets:
         assert ticket["requester_email"] in member_emails
         assert ticket["category"] in TICKET_CATEGORIES
+
+
+OWNER_TABLES = ("projects", "assets", "okrs", "tickets")
+
+
+def test_select_policy_requires_context_for_unassigned_rows() -> None:
+    """A null owner must not be visible without a department context."""
+    for table in OWNER_TABLES:
+        policy = select_policy(table)
+        assert "IS NULL" in policy
+        assert "current_setting('app.principal_dept', true) IS NOT NULL" in policy
+
+
+def test_select_policy_grants_unassigned_rows_only_with_context() -> None:
+    for table in OWNER_TABLES:
+        policy = select_policy(table)
+        # The share branch is guarded by the context check, so a bare
+        # top-level `<owner> IS NULL` cannot leak rows without context.
+        assert "IS NOT NULL AND (" in policy
+
+
+def test_select_policy_for_members_is_department_scoped() -> None:
+    assert select_policy("org_members") == (
+        "current_setting('app.principal_role', true) = 'admin' "
+        "OR dept = current_setting('app.principal_dept', true)"
+    )
+
+
+def test_select_policy_rejects_unknown_table() -> None:
+    with pytest.raises(KeyError):
+        select_policy("secrets")

@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.eval.security import run_rag_canaries, run_sql_canaries
+from app.eval.security import run_contextless_canaries, run_rag_canaries, run_sql_canaries
 from app.llm.fake import FakeProvider
 from app.rag.retrieval import Retriever
 from app.text_to_sql.executor import SqlExecutor
@@ -46,6 +46,12 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 async def test_sql_access_canaries_all_pass(seeded: None, engine: AsyncEngine) -> None:
     results = await run_sql_canaries(SqlExecutor(engine))
+    assert results
+    assert all(result.passed for result in results), [r.detail for r in results]
+
+
+async def test_contextless_canaries_all_pass(seeded: None, engine: AsyncEngine) -> None:
+    results = await run_contextless_canaries(engine)
     assert results
     assert all(result.passed for result in results), [r.detail for r in results]
 
@@ -84,7 +90,5 @@ async def test_readonly_role_cannot_rewrite_rls_context(seeded: None, engine: As
         with pytest.raises(Exception) as excinfo:
             async with conn.begin():
                 await conn.execute(text("SET LOCAL ROLE app_readonly"))
-                await conn.execute(
-                    text("SELECT set_config('app.principal_dept', 'Finance', true)")
-                )
+                await conn.execute(text("SELECT set_config('app.principal_dept', 'Finance', true)"))
         assert "permission denied" in str(excinfo.value).lower()

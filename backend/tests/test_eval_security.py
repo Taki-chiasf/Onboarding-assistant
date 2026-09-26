@@ -1,12 +1,16 @@
 from typing import cast
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from app.eval.security import (
     INJECTION_KIND,
+    NO_CONTEXT_KIND,
     RAG_KIND,
     SQL_KIND,
     InjectionCanary,
     RagCanary,
     SqlCanary,
+    run_contextless_canaries,
     run_injection_canaries,
     run_rag_canaries,
     run_security_canaries,
@@ -175,3 +179,78 @@ async def test_run_security_canaries_combines_kinds() -> None:
     assert summary.total > 0
     assert summary.all_passed
     assert set(summary.by_kind()) == {INJECTION_KIND, SQL_KIND, RAG_KIND}
+
+
+class _FakeResult:
+    def __init__(self, value: int) -> None:
+        self._value = value
+
+    def scalar_one(self) -> int:
+        return self._value
+
+
+class _FakeCM:
+    def __init__(self, value: object | None = None) -> None:
+        self._value = value
+
+    async def __aenter__(self) -> object:
+        return self if self._value is None else self._value
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+class _FakeConnection:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self._counts = counts
+        self.statements: list[str] = []
+
+    def begin(self) -> _FakeCM:
+        return _FakeCM()
+
+    async def execute(self, statement: object) -> _FakeResult | None:
+        sql = str(statement)
+        self.statements.append(sql)
+        if "SET LOCAL ROLE" in sql:
+            return None
+        view = sql.split("FROM ")[1].split()[0]
+        return _FakeResult(self._counts.get(view, 0))
+
+
+class _FakeEngine:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self.connection = _FakeConnection(counts)
+
+    def connect(self) -> _FakeCM:
+        return _FakeCM(self.connection)
+
+
+async def test_contextless_canaries_pass_on_zero_rows() -> None:
+    engine = _FakeEngine({})
+    results = await run_contextless_canaries(cast(AsyncEngine, engine))
+    assert len(results) == 5
+    assert all(result.passed for result in results)
+    assert all(result.kind == NO_CONTEXT_KIND for result in results)
+
+
+async def test_contextless_canary_fails_on_leaked_rows() -> None:
+    engine = _FakeEngine({"assets": 12})
+    results = await run_contextless_canaries(cast(AsyncEngine, engine))
+    leaked = [r for r in results if not r.passed]
+    assert len(leaked) == 1
+    assert "12" in leaked[0].detail
+
+
+async def test_contextless_canary_counts_as_access_control() -> None:
+    from app.eval.report import security_metrics
+
+    engine = _FakeEngine({})
+    summary = await run_security_canaries(
+        router=cast(IntentRouter, _FakeRouter(Intent.OUT_OF_SCOPE)),
+        executor=cast(SqlExecutor, _FakeExecutor([])),
+        engine=cast(AsyncEngine, engine),
+    )
+    assert set(summary.by_kind()) == {INJECTION_KIND, SQL_KIND, NO_CONTEXT_KIND}
+    metrics = security_metrics(summary)
+    assert metrics["rls_canary_pass_rate"] == 1.0
+    assert metrics["injection_canary_pass_rate"] == 1.0

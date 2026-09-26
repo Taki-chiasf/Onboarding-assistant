@@ -100,6 +100,80 @@ async def test_deny_by_default_without_context(seeded: None, engine: AsyncEngine
             assert result.fetchall() == []
 
 
+async def test_no_view_leaks_unassigned_rows_without_context(
+    seeded: None, engine: AsyncEngine
+) -> None:
+    """Unassigned rows are shared, but only once a principal context exists."""
+    views = ("org_members", "projects", "assets", "okrs", "tickets")
+    async with engine.connect() as conn:
+        async with conn.begin():
+            await conn.execute(text("SET LOCAL ROLE app_readonly"))
+            for view in views:
+                count = (await conn.execute(text(f"SELECT count(*) FROM {view}"))).scalar_one()
+                assert count == 0, f"{view} leaked {count} rows without context"
+
+
+async def test_unassigned_rows_are_shared_with_a_context(
+    seeded: None, executor: SqlExecutor
+) -> None:
+    """The share branch stays available to an authenticated caller."""
+    result = await executor.execute(
+        "SELECT count(*) AS available FROM assets WHERE assignee_email IS NULL",
+        dept="Engineering",
+        role="employee",
+        principal="ada@engineering.demo.example",
+    )
+    assert result.rows[0][0] > 0
+
+
+async def test_idp_claims_drive_row_level_security(seeded: None, engine: AsyncEngine) -> None:
+    """A principal mapped from IdP claims is scoped by RLS end to end."""
+    from app.auth.claims import principal_from_claims
+
+    executor = SqlExecutor(engine, max_rows=500)
+    employee = principal_from_claims(
+        {
+            "sub": "auth0|u1",
+            "email": "ada@engineering.demo.example",
+            "dept": "Engineering",
+            "role": "employee",
+        },
+        dept_claim="dept",
+        role_claim="role",
+        email_claim="email",
+    ).principal
+
+    own = await executor.execute(
+        "SELECT dept FROM org_members",
+        dept=employee.dept,
+        role=employee.role,
+        principal=employee.email,
+    )
+    assert {dept for (dept,) in own.rows} == {"Engineering"}
+
+    cross = await executor.execute(
+        "SELECT * FROM org_members WHERE dept = 'Finance'",
+        dept=employee.dept,
+        role=employee.role,
+        principal=employee.email,
+    )
+    assert cross.rows == []
+
+    admin = principal_from_claims(
+        {"sub": "auth0|hr", "dept": "People", "role": "admin"},
+        dept_claim="dept",
+        role_claim="role",
+        email_claim="email",
+    ).principal
+    everything = await executor.execute(
+        "SELECT dept FROM org_members",
+        dept=admin.dept,
+        role=admin.role,
+        principal=admin.email,
+    )
+    assert len(everything.rows) == 120
+
+
 async def test_department_context_is_transaction_scoped(seeded: None, engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         async with conn.begin():
