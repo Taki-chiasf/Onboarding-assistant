@@ -33,6 +33,26 @@ class Settings(BaseSettings):
     dev_principal_dept: str = "Engineering"
     dev_principal_role: str = "employee"
 
+    # OIDC (production auth path). Setting an issuer and client id enables the
+    # authorization-code flow; MOCK_OIDC stays for local dev and the demo.
+    # The issuer must match the token's `iss` claim exactly.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_audience: str = ""
+    oidc_scope: str = "openid profile email"
+    oidc_authorize_url: str = ""
+    oidc_token_url: str = ""
+    oidc_jwks_url: str = ""
+    oidc_dept_claim: str = "dept"
+    oidc_role_claim: str = "role"
+    oidc_email_claim: str = "email"
+    # Comma-separated allowlists. An empty department list accepts any
+    # non-empty department claim; a role outside the list degrades to the
+    # least-privileged role and is reported as claim drift.
+    oidc_allowed_departments: str = ""
+    oidc_allowed_roles: str = "employee,admin"
+
     session_secret: str = "dev-only-insecure-secret"
 
     sql_readonly_role: str = "app_readonly"

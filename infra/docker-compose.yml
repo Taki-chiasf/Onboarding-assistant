@@ -45,6 +45,16 @@ services:
       MOCK_OIDC: ${MOCK_OIDC:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-insecure-secret}
+      # Real OIDC (production auth path). Blank keeps the demo persona picker.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_DEPT_CLAIM: ${OIDC_DEPT_CLAIM:-dept}
+      OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM:-role}
+      OIDC_EMAIL_CLAIM: ${OIDC_EMAIL_CLAIM:-email}
+      OIDC_ALLOWED_DEPARTMENTS: ${OIDC_ALLOWED_DEPARTMENTS:-}
+      OIDC_ALLOWED_ROLES: ${OIDC_ALLOWED_ROLES:-employee,admin}
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
       REDIS_URL: redis://redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

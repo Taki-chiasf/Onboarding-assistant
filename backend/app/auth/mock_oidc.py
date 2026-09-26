@@ -32,12 +32,12 @@ def resolve_principal(request: Request, settings: SettingsDep) -> Principal | No
             dept=settings.dev_principal_dept,
             role=settings.dev_principal_role,
         )
-    if settings.mock_oidc == 2:
-        token = request.cookies.get(SESSION_COOKIE)
-        if token is None:
-            return None
-        return decode_principal(make_serializer(settings.session_secret), token)
-    return None
+    # Persona mode and the real OIDC path both carry the principal in the
+    # signed session cookie, so a disabled mock (0) still reads it.
+    token = request.cookies.get(SESSION_COOKIE)
+    if token is None:
+        return None
+    return decode_principal(make_serializer(settings.session_secret), token)
 
 
 def get_principal(request: Request, settings: SettingsDep) -> Principal:

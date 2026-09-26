@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { backendUrl } from "@/lib/backend";
+import { backendUrl, copySessionCookie } from "@/lib/backend";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -16,13 +16,6 @@ export async function POST(request: NextRequest) {
 
   const principal = await res.json();
   const response = NextResponse.json(principal);
-
-  const setCookie = res.headers.get("set-cookie");
-  if (setCookie) {
-    const [pair] = setCookie.split(";");
-    const [name, value] = pair.split("=");
-    response.cookies.set(name, value, { httpOnly: true, sameSite: "lax", path: "/" });
-  }
-
+  copySessionCookie(res, response);
   return response;
 }
