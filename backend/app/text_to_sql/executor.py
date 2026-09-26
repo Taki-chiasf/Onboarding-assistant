@@ -72,11 +72,11 @@ class SqlExecutor:
                     text("SELECT set_config('app.principal_role', :role, true)"),
                     {"role": role},
                 )
-                await conn.execute(text(f"SET LOCAL ROLE {self._readonly_role}"))
                 await conn.execute(
                     text("SELECT set_config('statement_timeout', :ms, true)"),
                     {"ms": str(self._timeout_ms)},
                 )
+                await conn.execute(text(f"SET LOCAL ROLE {self._readonly_role}"))
                 result = await conn.execute(text(sql))
                 columns = list(result.keys())
                 rows = [tuple(row) for row in result.fetchmany(self._max_rows + 1)]

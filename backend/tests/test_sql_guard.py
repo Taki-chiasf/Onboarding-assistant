@@ -64,6 +64,40 @@ def test_rejects_data_modifying_cte() -> None:
         validate_query(sql)
 
 
+def test_rejects_session_context_functions() -> None:
+    """A SELECT must not be able to rewrite the row-level-security context.
+
+    ``set_config`` and ``current_setting`` read or write the transaction-local
+    settings the access policies depend on, so any reference to them is denied
+    even though they appear inside an otherwise valid SELECT.
+    """
+    payloads = [
+        "SELECT set_config('app.principal_dept', 'Finance', true)",
+        "SELECT current_setting('app.principal_dept')",
+        "SELECT pg_catalog.set_config('app.principal_dept', 'Finance', true)",
+        "SELECT pg_catalog.current_setting('app.principal_dept')",
+        'SELECT "set_config"(\'app.principal_dept\', \'Finance\', true)',
+        "WITH x AS MATERIALIZED "
+        "(SELECT set_config('app.principal_dept', 'Finance', true)) "
+        "SELECT name FROM org_members",
+        "SELECT m.name FROM org_members m, "
+        "set_config('app.principal_dept', 'Finance', true) s",
+        "SELECT name FROM org_members "
+        "WHERE set_config('app.principal_dept', 'Finance', true) IS NOT NULL",
+    ]
+    for sql in payloads:
+        with pytest.raises(SqlGuardError, match="not allowed"):
+            validate_query(sql)
+
+
+def test_allows_non_context_functions() -> None:
+    sql = (
+        "SELECT count(*), max(created_at) FROM tickets "
+        "WHERE created_at > now() - interval '7 days'"
+    )
+    assert validate_query(sql) == sql
+
+
 def test_rejects_select_into() -> None:
     with pytest.raises(SqlGuardError, match="Into"):
         validate_query("SELECT * INTO backup FROM org_members")

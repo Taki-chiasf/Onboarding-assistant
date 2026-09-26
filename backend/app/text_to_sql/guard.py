@@ -33,9 +33,32 @@ _FORBIDDEN: tuple[type[exp.Expression], ...] = (
     exp.Into,
 )
 
+# The row-level-security policies read the caller's department and role from
+# transaction-local settings. A SELECT that can also write those settings would
+# be able to lift the very filter it runs under, so these functions are denied
+# outright. The deep defense is the revoke on the read-only role; this is the
+# parse-time layer that keeps the payload from ever reaching the database.
+_FORBIDDEN_FUNCTIONS = frozenset({"set_config", "current_setting"})
+
 
 class SqlGuardError(ValueError):
     """Raised when a statement fails the read-only safety gate."""
+
+
+def _function_name(node: exp.Func) -> str:
+    """Return the lowercased name of a function call node."""
+    if isinstance(node, exp.Anonymous):
+        return node.name.lower()
+    return node.sql_name().lower()
+
+
+def _references_forbidden_function(statement: exp.Expression) -> str | None:
+    for node in statement.find_all(exp.Func):
+        name = _function_name(node)
+        if name in _FORBIDDEN_FUNCTIONS:
+            return name
+    return None
+
 
 
 def validate_query(sql: str) -> str:
@@ -58,5 +81,9 @@ def validate_query(sql: str) -> str:
     for forbidden in _FORBIDDEN:
         if next(statement.find_all(forbidden), None) is not None:
             raise SqlGuardError(f"{forbidden.__name__} is not allowed")
+
+    forbidden_function = _references_forbidden_function(statement)
+    if forbidden_function is not None:
+        raise SqlGuardError(f"{forbidden_function} is not allowed")
 
     return sql

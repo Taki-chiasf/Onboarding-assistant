@@ -94,8 +94,8 @@ async def test_execute_sets_local_context_in_order() -> None:
     sqls = _sqls(engine)
     assert sqls[0] == "SELECT set_config('app.principal_dept', :dept, true)"
     assert sqls[1] == "SELECT set_config('app.principal_role', :role, true)"
-    assert sqls[2] == "SET LOCAL ROLE app_readonly"
-    assert sqls[3] == "SELECT set_config('statement_timeout', :ms, true)"
+    assert sqls[2] == "SELECT set_config('statement_timeout', :ms, true)"
+    assert sqls[3] == "SET LOCAL ROLE app_readonly"
     assert sqls[4] == "SELECT id, name FROM org_members"
     assert any(sql.startswith("INSERT INTO audit_logs") for sql in sqls)
     assert all("SET " not in sql or "SET LOCAL" in sql for sql in sqls)

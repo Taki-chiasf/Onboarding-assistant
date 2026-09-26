@@ -16,6 +16,7 @@ from app.rag.retrieval import RetrievedChunk, Retriever
 from app.router.router import IntentRouter
 from app.router.schema import Intent, RouteDecision, Surface
 from app.text_to_sql.executor import SqlExecutor, SqlResult
+from app.text_to_sql.guard import SqlGuardError
 
 
 def _decision(intent: Intent) -> RouteDecision:
@@ -38,15 +39,24 @@ class _FakeRouter:
 
 
 class _FakeExecutor:
-    def __init__(self, rows: list[tuple[object, ...]], *, raise_error: bool = False) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[object, ...]],
+        *,
+        raise_error: bool = False,
+        error: BaseException | None = None,
+    ) -> None:
         self._rows = rows
         self._raise = raise_error
+        self._error = error
 
     async def execute(
         self, sql: str, *, dept: str, role: str, principal: str, trace_id: str | None = None
     ) -> SqlResult:
+        if self._error is not None:
+            raise self._error
         if self._raise:
-            raise ValueError("only SELECT statements are allowed")
+            raise SqlGuardError("only SELECT statements are allowed")
         return SqlResult(columns=["x"], rows=self._rows, truncated=False, latency_ms=1)
 
 
@@ -118,6 +128,15 @@ async def test_sql_canary_rejected_query_is_safe() -> None:
     results = await run_sql_canaries(executor, (canary,))
     assert results[0].passed
     assert "blocked" in results[0].detail
+
+
+async def test_sql_canary_infrastructure_error_fails() -> None:
+    """A probe that never ran must not be counted as a pass."""
+    executor = cast(SqlExecutor, _FakeExecutor([], error=ConnectionError("database is down")))
+    canary = SqlCanary("probe", "SELECT * FROM org_members", "Engineering", "employee", "Finance")
+    results = await run_sql_canaries(executor, (canary,))
+    assert not results[0].passed
+    assert "did not run" in results[0].detail
 
 
 async def test_rag_canary_fails_on_out_of_scope_chunk() -> None:

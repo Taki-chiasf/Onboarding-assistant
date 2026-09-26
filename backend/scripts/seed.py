@@ -239,6 +239,15 @@ def _ensure_readonly_role(conn: Connection) -> None:
     )
     conn.execute(text(f"GRANT USAGE ON SCHEMA {ORG_SCHEMA} TO {READONLY_ROLE}"))
     conn.execute(text(f"GRANT SELECT ON ALL TABLES IN SCHEMA {ORG_SCHEMA} TO {READONLY_ROLE}"))
+    # The access policies read the caller's context from transaction-local
+    # settings. A query running as the read-only role must not be able to
+    # rewrite that context before the policies are evaluated, so the function
+    # that writes it is revoked here too. PUBLIC carries an implicit execute
+    # grant on every built-in, which a role-level revoke alone does not remove,
+    # so both the role and PUBLIC are covered.
+    set_config = "pg_catalog.set_config(text, text, boolean)"
+    conn.execute(text(f"REVOKE EXECUTE ON FUNCTION {set_config} FROM {READONLY_ROLE}"))
+    conn.execute(text(f"REVOKE EXECUTE ON FUNCTION {set_config} FROM PUBLIC"))
 
 
 _READ_VIEWS: dict[str, str] = {

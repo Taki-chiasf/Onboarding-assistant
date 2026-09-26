@@ -56,7 +56,13 @@ async def test_rag_acl_canaries_all_pass(seeded: None, engine: AsyncEngine) -> N
     if not count:
         pytest.skip("corpus is not ingested")
 
-    provider = FakeProvider()
+    # Retrieval compares the query embedding with the stored chunk embeddings,
+    # so the query must be embedded the same way the corpus was. Use the real
+    # provider when a key is configured, and the deterministic fake otherwise.
+    from app.core.config import get_settings
+    from app.llm.client import get_provider
+
+    provider = get_provider() if get_settings().mistral_api_key else FakeProvider()
 
     async def embed(texts: list[str]) -> list[list[float]]:
         return await provider.embed("mistral-embed", texts)
@@ -65,3 +71,20 @@ async def test_rag_acl_canaries_all_pass(seeded: None, engine: AsyncEngine) -> N
     results = await run_rag_canaries(retriever)
     assert results
     assert all(result.passed for result in results), [r.detail for r in results]
+
+
+async def test_readonly_role_cannot_rewrite_rls_context(seeded: None, engine: AsyncEngine) -> None:
+    """The deep defense, independent of the parse-time guard.
+
+    Even if a query reached the database with ``set_config`` in it, the
+    read-only role must not be able to run it, because the policies read the
+    context it would rewrite.
+    """
+    async with engine.connect() as conn:
+        with pytest.raises(Exception) as excinfo:
+            async with conn.begin():
+                await conn.execute(text("SET LOCAL ROLE app_readonly"))
+                await conn.execute(
+                    text("SELECT set_config('app.principal_dept', 'Finance', true)")
+                )
+        assert "permission denied" in str(excinfo.value).lower()

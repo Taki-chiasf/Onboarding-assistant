@@ -16,6 +16,7 @@ from app.rag.retrieval import Retriever
 from app.router.router import IntentRouter
 from app.router.schema import Intent
 from app.text_to_sql.executor import SqlExecutor
+from app.text_to_sql.guard import SqlGuardError
 
 SQL_KIND = "sql_access"
 RAG_KIND = "rag_acl"
@@ -65,6 +66,27 @@ SQL_CANARIES: tuple[SqlCanary, ...] = (
         "show the assets assigned to Finance staff",
         "SELECT asset_tag FROM assets WHERE assignee_email IN "
         "(SELECT email FROM org_members WHERE dept = 'Finance')",
+        dept="Engineering",
+        role="employee",
+        forbidden_dept="Finance",
+    ),
+    # A materialized CTE evaluates its body before the outer scan, so a context
+    # rewrite smuggled into it would land before the protected read.
+    SqlCanary(
+        "department context rewrite via a materialized CTE",
+        "WITH reset AS MATERIALIZED "
+        "(SELECT set_config('app.principal_dept', 'Finance', true)) "
+        "SELECT name, email FROM org_members",
+        dept="Engineering",
+        role="employee",
+        forbidden_dept="Finance",
+    ),
+    # A comma join is the shorthand form of a lateral cross join; the rewrite
+    # runs as a row source of the same SELECT that reads protected rows.
+    SqlCanary(
+        "department context rewrite via a reversed join",
+        "SELECT m.name, m.email FROM org_members m, "
+        "set_config('app.principal_dept', 'Finance', true) AS s",
         dept="Engineering",
         role="employee",
         forbidden_dept="Finance",
@@ -154,13 +176,27 @@ async def run_sql_canaries(
                 role=canary.role,
                 principal=f"canary@{canary.dept.lower()}.demo.example",
             )
-        except Exception as exc:  # noqa: BLE001 - a rejected probe is a safe outcome
+        except SqlGuardError as exc:
+            # The guard refuses the probe before it reaches the database, which
+            # is the safest possible outcome: no rows can leak.
             results.append(
                 CanaryResult(
                     name=name,
                     kind=SQL_KIND,
                     passed=True,
                     detail=f"{_REJECTED_PREFIX}: {exc}",
+                )
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 - any other failure means the probe did not run
+            # A connection, timeout, or permission error is not a pass: the
+            # canary never observed the protected data, so it proves nothing.
+            results.append(
+                CanaryResult(
+                    name=name,
+                    kind=SQL_KIND,
+                    passed=False,
+                    detail=f"canary did not run: {exc}",
                 )
             )
             continue
