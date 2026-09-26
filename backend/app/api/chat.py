@@ -6,6 +6,8 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
+from app.core.budget import BudgetDecision, daily_usage, evaluate, record_runaway
 from app.core.config import get_settings
 from app.llm.client import get_provider, get_router_provider
 from app.llm.models import ModelConfig, load_models
@@ -74,6 +77,33 @@ PrincipalDep = Annotated[Principal, Depends(get_principal)]
 OrchestratorDep = Annotated[ChatDispatcher, Depends(get_chat_orchestrator)]
 
 
+async def enforce_budget(request: Request, principal: PrincipalDep) -> BudgetDecision:
+    """Read today's ledger for the caller and decide whether the turn may run.
+
+    Resolved before the stream starts so an over-budget request never reaches a
+    model. Without a database (local unit runs) the cap cannot be evaluated, so
+    the turn is allowed.
+    """
+    settings = get_settings()
+    engine: AsyncEngine | None = getattr(request.app.state, "engine", None)
+    if engine is None or settings.daily_token_budget <= 0:
+        return BudgetDecision(allowed=True, tokens_used=0, cost_usd=Decimal("0"))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        usage = await daily_usage(session, user_id=principal.sub, day=datetime.now(UTC).date())
+    decision = evaluate(
+        usage,
+        token_budget=settings.daily_token_budget,
+        cost_alert_usd=settings.daily_cost_alert_usd,
+    )
+    if decision.runaway:
+        record_runaway(principal.sub, decision)
+    return decision
+
+
+BudgetDep = Annotated[BudgetDecision, Depends(enforce_budget)]
+
+
 def _sse(event: str, data: object) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -84,8 +114,12 @@ async def chat(
     request: Request,
     principal: PrincipalDep,
     orchestrator: OrchestratorDep,
+    budget: BudgetDep,
 ) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
+        if not budget.allowed:
+            yield _sse("limit", {"message": budget.message})
+            return
         try:
             async for event in orchestrator.stream(
                 payload.query, principal, payload.conversation_id, surface=payload.surface

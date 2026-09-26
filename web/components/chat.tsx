@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, Plus } from "lucide-react";
+import { ArrowUp, Gauge, Plus } from "lucide-react";
 
 import { LogoutButton } from "@/components/logout-button";
 import { PixelMark } from "@/components/pixel-mark";
@@ -221,6 +222,11 @@ export function Chat({ principal }: { principal: Principal }) {
           applyAssistant((m) => ({ ...m, clarify: data as unknown as ChatMessage["clarify"] }));
         } else if (event === "token") {
           applyAssistant((m) => ({ ...m, content: m.content + String(data.text ?? "") }));
+        } else if (event === "limit" || event === "error") {
+          applyAssistant((m) => ({
+            ...m,
+            content: String(data.message ?? "Something went wrong."),
+          }));
         } else if (event === "done") {
           applyAssistant((m) => ({
             ...m,
@@ -309,6 +315,15 @@ export function Chat({ principal }: { principal: Principal }) {
             )}
           </nav>
           <div className="border-t p-3">
+            {principal.role === "admin" && (
+              <Link
+                href="/admin"
+                className="mb-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <Gauge className="h-4 w-4" />
+                Cost dashboard
+              </Link>
+            )}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{principal.email}</p>

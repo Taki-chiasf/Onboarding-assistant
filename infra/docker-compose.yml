@@ -64,6 +64,8 @@ services:
       DEV_PRINCIPAL_EMAIL: ${DEV_PRINCIPAL_EMAIL:-dev@example.com}
       DEV_PRINCIPAL_DEPT: ${DEV_PRINCIPAL_DEPT:-Engineering}
       DEV_PRINCIPAL_ROLE: ${DEV_PRINCIPAL_ROLE:-employee}
+      DAILY_TOKEN_BUDGET: ${DAILY_TOKEN_BUDGET:-200000}
+      DAILY_COST_ALERT_USD: ${DAILY_COST_ALERT_USD:-1.0}
     ports:
       - "8000:8000"
     depends_on:

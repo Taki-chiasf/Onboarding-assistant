@@ -55,6 +55,12 @@ class Settings(BaseSettings):
 
     session_secret: str = "dev-only-insecure-secret"
 
+    # Per-user daily token budget (tokens in + out, summed across models). The
+    # request that would reach the cap is rejected; 0 disables the cap. The
+    # spend threshold only raises a runaway alert, it never blocks.
+    daily_token_budget: int = 200_000
+    daily_cost_alert_usd: float = 1.0
+
     sql_readonly_role: str = "app_readonly"
     sql_statement_timeout_ms: int = 5000
     sql_max_rows: int = 100
