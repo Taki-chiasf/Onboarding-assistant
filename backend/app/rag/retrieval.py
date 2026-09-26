@@ -2,7 +2,9 @@
 
 Candidates come from three legs — vector cosine, full-text (`ts_rank`), and
 trigram fuzzy — each filtered by the caller's access tags in SQL, then fused
-with reciprocal-rank fusion and re-ranked before the top-k cutoff.
+with reciprocal-rank fusion and re-ranked before the top-k cutoff. A chunk is in
+scope when its tags match the caller's department and at least one of the roles
+the caller's role grants.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql.elements import TextClause
 
+from app.auth.principal import effective_roles
 from app.models.rag import EMBEDDING_DIM
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
@@ -46,16 +49,22 @@ class IdentityReranker:
         return chunks
 
 
-def acl_visible(tags: Sequence[str], dept: str, role: str) -> bool:
-    return ("dept:all" in tags or f"dept:{dept}" in tags) and (
-        "role:all" in tags or f"role:{role}" in tags
-    )
+def acl_role_tags(role: str) -> list[str]:
+    """The role tags a caller's role grants, for the any-of role check."""
+    return [f"role:{granted}" for granted in effective_roles(role)]
+
+
+def acl_visible(tags: Sequence[str], dept: str, role_tags: Sequence[str]) -> bool:
+    """Python mirror of :func:`acl_fragment` for one chunk and one caller's scope."""
+    if not ("dept:all" in tags or f"dept:{dept}" in tags):
+        return False
+    return "role:all" in tags or any(tag in tags for tag in role_tags)
 
 
 def acl_fragment() -> str:
     return (
         "(acl_tags ? 'dept:all' OR acl_tags ? :dept) "
-        "AND (acl_tags ? 'role:all' OR acl_tags ? :role)"
+        "AND (acl_tags ? 'role:all' OR acl_tags ?| CAST(:roles AS text[]))"
     )
 
 
@@ -170,7 +179,7 @@ class Retriever:
         restrict_types = bool(source_types)
         params: dict[str, object] = {
             "dept": f"dept:{dept}",
-            "role": f"role:{role}",
+            "roles": acl_role_tags(role),
             "limit": limit,
         }
         if restrict_types:

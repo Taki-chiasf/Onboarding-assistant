@@ -1,5 +1,11 @@
 from pydantic import BaseModel
 
+# Document access is additive: a role carries the access of every role it sits
+# above, so a more privileged identity never sees less of the corpus. Documents
+# are tagged with the reader's roles, not with their seniority, which keeps a
+# single role dimension in the ACL without a hierarchy inside the tag values.
+ROLE_IMPLIES: dict[str, tuple[str, ...]] = {"admin": ("employee",)}
+
 
 class Principal(BaseModel):
     sub: str
@@ -28,3 +34,16 @@ DEMO_PERSONAS: list[Principal] = [
         role="employee",
     ),
 ]
+
+
+def effective_roles(role: str) -> tuple[str, ...]:
+    """A role plus every role it grants, in order, without repeats.
+
+    An unrecognized role grants only itself, so an identity the deployment does
+    not know about reads exactly what its own role allows.
+    """
+    roles = [role]
+    for granted in ROLE_IMPLIES.get(role, ()):
+        if granted not in roles:
+            roles.append(granted)
+    return tuple(roles)

@@ -6,6 +6,7 @@ from app.rag.retrieval import (
     RetrievedChunk,
     Retriever,
     acl_fragment,
+    acl_role_tags,
     acl_visible,
     fuse_and_rank,
     rrf_fuse,
@@ -25,19 +26,39 @@ def _chunk(chunk_id: str, similarity: float = 0.5) -> RetrievedChunk:
 
 
 def test_acl_visible_dept_and_role() -> None:
-    assert acl_visible(["dept:all", "role:employee"], "Engineering", "employee")
-    assert acl_visible(["dept:Engineering", "role:employee"], "Engineering", "employee")
-    assert not acl_visible(["dept:Engineering", "role:employee"], "Finance", "employee")
-    assert not acl_visible(["dept:all", "role:admin"], "Engineering", "employee")
-    assert acl_visible(["dept:all", "role:all"], "Engineering", "employee")
+    employee = acl_role_tags("employee")
+    assert acl_visible(["dept:all", "role:employee"], "Engineering", employee)
+    assert acl_visible(["dept:Engineering", "role:employee"], "Engineering", employee)
+    assert not acl_visible(["dept:Engineering", "role:employee"], "Finance", employee)
+    assert not acl_visible(["dept:all", "role:admin"], "Engineering", employee)
+    assert acl_visible(["dept:all", "role:all"], "Engineering", employee)
+
+
+def test_acl_visible_honors_every_granted_role() -> None:
+    # A role carries the access of the roles it sits above, so an admin still
+    # reads the company-wide documents tagged for employees.
+    assert acl_visible(["dept:all", "role:employee"], "People", acl_role_tags("admin"))
+    assert acl_visible(["dept:all", "role:admin"], "People", acl_role_tags("admin"))
+    # The grant is on the role, not the seniority: the department still applies.
+    assert not acl_visible(["dept:Engineering", "role:employee"], "People", acl_role_tags("admin"))
+    # Nor does a grant run downwards: an employee does not inherit admin-only
+    # documents.
+    assert not acl_visible(["dept:all", "role:admin"], "People", acl_role_tags("employee"))
+
+
+def test_acl_role_tags_expands_implied_roles() -> None:
+    assert acl_role_tags("employee") == ["role:employee"]
+    assert acl_role_tags("admin") == ["role:admin", "role:employee"]
 
 
 def test_acl_fragment_references_params() -> None:
     fragment = acl_fragment()
     assert ":dept" in fragment
-    assert ":role" in fragment
+    assert ":roles" in fragment
     assert "dept:all" in fragment
     assert "role:all" in fragment
+    # The role check is an any-of over the caller's roles, not a single equality.
+    assert "acl_tags ?| " in fragment
 
 
 def test_rrf_fuse_combines_rankings() -> None:
@@ -84,10 +105,12 @@ class _FakeResult:
 
 
 class _FakeConnection:
-    def __init__(self, results: list[_FakeResult]) -> None:
+    def __init__(self, results: list[_FakeResult], calls: list[dict[str, object]]) -> None:
         self._results = results
+        self._calls = calls
 
     async def execute(self, statement: object, params: dict[str, object]) -> _FakeResult:
+        self._calls.append(params)
         return self._results.pop(0)
 
     async def __aenter__(self) -> "_FakeConnection":
@@ -100,9 +123,10 @@ class _FakeConnection:
 class _FakeEngine:
     def __init__(self, results: list[_FakeResult]) -> None:
         self._results = results
+        self.calls: list[dict[str, object]] = []
 
     def connect(self) -> _FakeConnection:
-        return _FakeConnection(self._results)
+        return _FakeConnection(self._results, self.calls)
 
 
 def _row(chunk_id: str, similarity: float) -> dict[str, object]:
@@ -136,3 +160,18 @@ async def test_retriever_retrieves_and_ranks() -> None:
 
     assert len(chunks) == 3
     assert chunks[0].score >= chunks[1].score >= chunks[2].score
+
+
+async def test_retriever_binds_every_role_the_caller_holds() -> None:
+    engine = _FakeEngine([_FakeResult([]), _FakeResult([]), _FakeResult([])])
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 1024]
+
+    retriever = Retriever(cast(AsyncEngine, engine), embed)
+    await retriever.retrieve("how much leave?", dept="People", role="admin")
+
+    assert len(engine.calls) == 3
+    for params in engine.calls:
+        assert params["dept"] == "dept:People"
+        assert params["roles"] == ["role:admin", "role:employee"]

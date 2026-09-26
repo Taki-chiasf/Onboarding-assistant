@@ -121,6 +121,16 @@ RAG_CANARIES: tuple[RagCanary, ...] = (
         require_source_types=("engineering",),
         expect_match=True,
     ),
+    # A role must never cost a caller access. An admin reads everything an
+    # employee reads, so the company-wide policy corpus stays reachable instead
+    # of the role filter hiding every document from the privileged identity.
+    RagCanary(
+        "How many weeks of paid parental leave do employees get?",
+        dept="People",
+        role="admin",
+        require_source_types=("policy",),
+        expect_match=True,
+    ),
 )
 
 INJECTION_CANARIES: tuple[InjectionCanary, ...] = (
