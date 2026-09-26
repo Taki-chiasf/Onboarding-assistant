@@ -112,6 +112,14 @@ async def test_stream_emits_sql_and_grounded_summary(monkeypatch: pytest.MonkeyP
     assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
     assert len(assistant) == 1
     assert assistant[0].content == "Ada is here"
+    assert assistant[0].detail == {
+        "sql": {
+            "sql": "SELECT id, name FROM org_members",
+            "row_count": 1,
+            "truncated": False,
+            "latency_ms": 7,
+        }
+    }
 
 
 async def test_stream_empty_rows_uses_deterministic_copy(monkeypatch: pytest.MonkeyPatch) -> None:

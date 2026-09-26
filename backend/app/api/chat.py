@@ -128,6 +128,8 @@ async def get_messages(
             "id": str(row.id),
             "role": row.role,
             "content": row.content,
+            "trace_id": row.trace_id,
+            "detail": row.detail,
             "cost_usd": str(row.cost_usd) if row.cost_usd is not None else None,
             "model_version": row.model_version,
             "prompt_version": row.prompt_version,

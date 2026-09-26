@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from app.api import chat as chat_mod
 from app.api.chat import get_chat_orchestrator
 from app.core.config import get_settings
 from app.main import create_app
@@ -67,6 +68,70 @@ async def test_chat_forwards_pinned_surface(app: FastAPI, client: AsyncClient) -
     assert fake.surfaces == ["rag-docs"]
 
 
+class _StubMessage:
+    def __init__(self, detail: dict[str, Any] | None) -> None:
+        self.id = uuid.uuid4()
+        self.role = "assistant"
+        self.content = "16 weeks"
+        self.cost_usd = None
+        self.model_version = "mistral-large-2512"
+        self.prompt_version = "grounding.v1"
+        self.trace_id = "trace-abc"
+        self.detail = detail
+
+
+class _StubResult:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> "_StubScalars":
+        return _StubScalars(self._rows)
+
+
+class _StubScalars:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+
+class _StubSession:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    async def execute(self, statement: object) -> _StubResult:
+        return _StubResult(self._rows)
+
+    async def __aenter__(self) -> "_StubSession":
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+async def test_messages_endpoint_returns_evidence(
+    app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Assistant evidence (sources, sql) and the trace id must survive a reload
+    so the panel renders again from history."""
+    app.state.engine = None
+    detail = {"sources": [{"id": "chunk-1", "source_uri": "file:docs/a.md"}]}
+    stub = _StubMessage(detail)
+    monkeypatch.setattr(
+        chat_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit=False: lambda: _StubSession([stub]),
+    )
+
+    resp = await client.get(f"/api/conversations/{uuid.uuid4()}/messages")
+
+    assert resp.status_code == 200
+    row = resp.json()[0]
+    assert row["detail"] == detail
+    assert row["trace_id"] == "trace-abc"
+
+
 _LIVE_DB_URL = os.environ.get("TEST_DATABASE_URL", "")
 
 
@@ -111,9 +176,21 @@ async def test_conversation_list_and_history_use_orm_session(
     factory = async_sessionmaker(application.state.engine, expire_on_commit=False)
     convo_id = uuid.uuid4()
     msg_id = uuid.uuid4()
+    answer_id = uuid.uuid4()
+    detail = {"sources": [{"id": "chunk-1", "source_uri": "file:docs/a.md"}]}
     async with factory() as session:
         session.add(Conversation(id=convo_id, user_id="convo-regression-user", title="Regression"))
         session.add(Message(id=msg_id, conversation_id=convo_id, role="user", content="hello"))
+        session.add(
+            Message(
+                id=answer_id,
+                conversation_id=convo_id,
+                role="assistant",
+                content="hi",
+                trace_id="trace-live",
+                detail=detail,
+            )
+        )
         await session.commit()
     try:
         listed = await client.get("/api/conversations")
@@ -122,9 +199,11 @@ async def test_conversation_list_and_history_use_orm_session(
 
         history = await client.get(f"/api/conversations/{convo_id}/messages")
         assert history.status_code == 200
-        assert [m["content"] for m in history.json()] == ["hello"]
+        assert [m["content"] for m in history.json()] == ["hello", "hi"]
+        assert history.json()[1]["detail"] == detail
+        assert history.json()[1]["trace_id"] == "trace-live"
     finally:
         async with factory() as session:
-            await session.execute(delete(Message).where(Message.id == msg_id))
+            await session.execute(delete(Message).where(Message.id.in_([msg_id, answer_id])))
             await session.execute(delete(Conversation).where(Conversation.id == convo_id))
             await session.commit()

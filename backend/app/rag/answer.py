@@ -28,7 +28,7 @@ from app.llm.provider import ChatProvider
 from app.models import Conversation, Message
 from app.prompts.loader import prompt_version
 from app.rag.cost import record_cost
-from app.rag.grounding import CITE_OR_DIE, build_grounding_messages, to_sources
+from app.rag.grounding import CITE_OR_DIE, Source, build_grounding_messages, to_sources
 from app.rag.retrieval import Retriever
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,7 @@ class RagAnswerer:
                 tokens_in,
                 tokens_out,
                 cost,
+                sources,
             )
 
             span.set_attribute("answer.cited_sources", len(chunks))
@@ -176,6 +177,7 @@ class RagAnswerer:
         tokens_in: int,
         tokens_out: int,
         cost: Decimal,
+        sources: list[Source],
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
         async with self._session_factory() as session:
@@ -190,6 +192,7 @@ class RagAnswerer:
                     latency_ms=latency_ms,
                     prompt_version=version,
                     model_version=model,
+                    detail={"sources": [asdict(source) for source in sources]},
                 )
             )
             if tokens_in or tokens_out:

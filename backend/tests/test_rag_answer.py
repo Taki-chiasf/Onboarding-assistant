@@ -144,6 +144,16 @@ async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.Monkey
     assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
     assert len(assistant) == 1
     assert assistant[0].content == "16 weeks"
+    assert assistant[0].detail == {
+        "sources": [
+            {
+                "id": "chunk-1",
+                "source_uri": "file:docs/a.md",
+                "section_anchor": "A",
+                "score": 0.5,
+            }
+        ]
+    }
 
 
 async def test_stream_passes_source_type_restriction(monkeypatch: pytest.MonkeyPatch) -> None:

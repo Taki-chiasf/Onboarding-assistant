@@ -30,6 +30,7 @@ def test_message_columns() -> None:
         "latency_ms",
         "prompt_version",
         "model_version",
+        "detail",
         "created_at",
     } <= columns
 

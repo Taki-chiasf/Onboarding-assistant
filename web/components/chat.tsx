@@ -7,7 +7,7 @@ import { ArrowUp, Plus } from "lucide-react";
 import { LogoutButton } from "@/components/logout-button";
 import { PixelMark } from "@/components/pixel-mark";
 import { Transcript } from "@/components/transcript";
-import type { ChatMessage, Surface } from "@/components/transcript";
+import type { ChatMessage, Source, SqlDetail, Surface } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EASE, riseIn, stagger, spring, transition } from "@/lib/motion";
@@ -155,8 +155,21 @@ export function Chat({ principal }: { principal: Principal }) {
     setDraft(null);
     const res = await fetch(`/api/conversations/${id}/messages`);
     if (!res.ok) return;
-    const history = (await res.json()) as { role: "user" | "assistant"; content: string }[];
-    setMessages(history.map((m) => ({ role: m.role, content: m.content })));
+    const history = (await res.json()) as {
+      role: "user" | "assistant";
+      content: string;
+      trace_id?: string | null;
+      detail?: { sources?: Source[]; sql?: SqlDetail } | null;
+    }[];
+    setMessages(
+      history.map((m) => ({
+        role: m.role,
+        content: m.content,
+        sources: m.detail?.sources,
+        sql: m.detail?.sql,
+        traceId: m.trace_id ?? undefined,
+      }))
+    );
   }
 
   function newConversation() {

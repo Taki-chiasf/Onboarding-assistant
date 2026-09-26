@@ -117,17 +117,13 @@ class SqlAnswerer:
                     trace_id=trace_id,
                 )
 
-            yield {
-                "event": "sql",
-                "data": asdict(
-                    SqlEvent(
-                        sql=built.sql,
-                        row_count=len(result.rows),
-                        truncated=result.truncated,
-                        latency_ms=result.latency_ms,
-                    )
-                ),
-            }
+            sql_detail = SqlEvent(
+                sql=built.sql,
+                row_count=len(result.rows),
+                truncated=result.truncated,
+                latency_ms=result.latency_ms,
+            )
+            yield {"event": "sql", "data": asdict(sql_detail)}
 
             summary_model = self._models.models["grounding"]
             summary_tokens_in = 0
@@ -170,6 +166,7 @@ class SqlAnswerer:
                 summary_tokens_in,
                 tokens_out,
                 summary_cost,
+                sql_detail,
             )
 
             span.set_attribute("answer.row_count", len(result.rows))
@@ -234,6 +231,7 @@ class SqlAnswerer:
         tokens_in: int,
         tokens_out: int,
         summary_cost: Decimal,
+        sql_detail: SqlEvent,
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
         async with self._session_factory() as session:
@@ -248,6 +246,7 @@ class SqlAnswerer:
                     latency_ms=latency_ms,
                     prompt_version=version,
                     model_version=model,
+                    detail={"sql": asdict(sql_detail)},
                 )
             )
             await record_cost(
