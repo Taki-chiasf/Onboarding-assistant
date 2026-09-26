@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator, Sequence
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
@@ -9,9 +10,11 @@ from app.eval.rag_eval import (
     RetrievalCaseResult,
     RetrievalEvalSummary,
     judge_answer,
+    run_answer_eval,
     run_retrieval_eval,
 )
-from app.llm.provider import MistralProvider
+from app.llm.models import ModelConfig
+from app.llm.provider import ChatMessage, ChatProvider, MistralProvider
 from app.rag.retrieval import RetrievedChunk, Retriever
 
 
@@ -88,3 +91,38 @@ def test_summary_dataclasses_are_frozen() -> None:
     result = RetrievalCaseResult(prompt="p", expected=["a"], retrieved=["b"], hit=False)
     summary = RetrievalEvalSummary(recall_at_5=0.5, total=2, hits=1, results=[result])
     assert summary.recall_at_5 == 0.5
+
+
+class _FakeAnswerProvider:
+    def effective_model(self, model: str) -> str:
+        return model
+
+    async def stream(
+        self, model: str, messages: Sequence[ChatMessage]
+    ) -> AsyncIterator[str]:
+        yield "grounded "
+        yield "answer"
+
+    async def chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
+        return "pass"
+
+
+async def test_answer_eval_collects_latency_cost_and_verdicts() -> None:
+    models = ModelConfig(
+        provider="mistral",
+        models={"grounding": "g-model", "judge": "j-model", "embed": "e-model"},
+    )
+    retriever = _FakeRetriever(["c1", "c2"])
+    summary = await run_answer_eval(
+        cast(Retriever, retriever),
+        cast(ChatProvider, _FakeAnswerProvider()),
+        models,
+        _cases(),
+    )
+
+    assert len(summary.results) == 3
+    assert all(result.answer == "grounded answer" for result in summary.results)
+    assert all(result.judged_correct for result in summary.results)
+    assert all(result.first_token_s <= result.latency_s for result in summary.results)
+    assert len(summary.judge_verdicts) == 3
+    assert summary.answers == ["grounded answer"] * 3

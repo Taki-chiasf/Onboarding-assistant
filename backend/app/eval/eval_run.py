@@ -28,6 +28,7 @@ from app.eval.baseline import (
     save_baseline,
 )
 from app.eval.gates import GATES
+from app.eval.rag_eval import AnswerEvalSummary
 from app.eval.report import (
     RunReport,
     dont_know_metric,
@@ -180,13 +181,15 @@ async def _run_suites(
         "sql_summarize": prompt_version("sql_summarize"),
     }
     model_versions = {
-        "router": models.models["router"],
-        "sql_builder": models.models["sql_builder"],
-        "grounding": models.models["grounding"],
+        "router": provider.effective_model(models.models["router"]),
+        "sql_builder": provider.effective_model(models.models["sql_builder"]),
+        "grounding": provider.effective_model(models.models["grounding"]),
+        "judge": provider.effective_model(models.models["judge"]),
     }
 
     sql_summary: SqlEvalSummary | None = None
     security_summary: SecuritySummary | None = None
+    answer_summary: AnswerEvalSummary | None = None
     recall: float | None = None
 
     if settings.database_url:
@@ -215,10 +218,12 @@ async def _run_suites(
             )
             if retriever is not None and not keyless:
                 from app.eval.golden import build_golden_set
-                from app.eval.rag_eval import run_retrieval_eval
+                from app.eval.rag_eval import run_answer_eval, run_retrieval_eval
 
-                retrieval = await run_retrieval_eval(retriever, build_golden_set())
+                golden = build_golden_set()
+                retrieval = await run_retrieval_eval(retriever, golden)
                 recall = retrieval.recall_at_5
+                answer_summary = await run_answer_eval(retriever, provider, models, golden)
         finally:
             await engine.dispose()
     else:
@@ -230,6 +235,13 @@ async def _run_suites(
         sql=sql_summary,
         security=security_summary,
         recall_at_5=recall,
+        answer_latencies_s=answer_summary.latencies_s if answer_summary else (),
+        first_token_latencies_s=(
+            answer_summary.first_token_latencies_s if answer_summary else ()
+        ),
+        costs_usd=answer_summary.costs_usd if answer_summary else (),
+        judge_verdicts=answer_summary.judge_verdicts if answer_summary else (),
+        answers=answer_summary.answers if answer_summary else (),
     )
     return sources, prompt_versions, model_versions
 

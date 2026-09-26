@@ -10,11 +10,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from time import perf_counter
 
 from app.eval.golden import GoldenCase, build_golden_set, recall_at_k
-from app.llm.models import load_models
-from app.llm.provider import ChatMessage, MistralProvider
+from app.llm.models import ModelConfig, load_models
+from app.llm.pricing import compute_cost, estimate_tokens
+from app.llm.provider import ChatMessage, ChatProvider
 from app.prompts.loader import load_prompt
+from app.rag.grounding import build_context, build_grounding_messages
 from app.rag.retrieval import Retriever
 
 logger = logging.getLogger(__name__)
@@ -68,7 +71,7 @@ async def run_retrieval_eval(
 
 
 async def judge_answer(
-    provider: MistralProvider, model: str, query: str, answer: str, context: str
+    provider: ChatProvider, model: str, query: str, answer: str, context: str
 ) -> bool:
     prompt = load_prompt("judge")
     user_content = prompt.user.format(context=context, query=query, answer=answer)
@@ -78,6 +81,96 @@ async def judge_answer(
     ]
     verdict = await provider.chat(model, messages)
     return verdict.strip().lower().startswith("pass")
+
+
+@dataclass(frozen=True)
+class AnswerCaseResult:
+    prompt: str
+    answer: str
+    first_token_s: float
+    latency_s: float
+    cost_usd: float
+    judged_correct: bool
+
+
+@dataclass(frozen=True)
+class AnswerEvalSummary:
+    results: list[AnswerCaseResult]
+
+    @property
+    def first_token_latencies_s(self) -> list[float]:
+        return [result.first_token_s for result in self.results]
+
+    @property
+    def latencies_s(self) -> list[float]:
+        return [result.latency_s for result in self.results]
+
+    @property
+    def costs_usd(self) -> list[float]:
+        return [result.cost_usd for result in self.results]
+
+    @property
+    def judge_verdicts(self) -> list[bool]:
+        return [result.judged_correct for result in self.results]
+
+    @property
+    def answers(self) -> list[str]:
+        return [result.answer for result in self.results]
+
+
+async def run_answer_eval(
+    retriever: Retriever,
+    provider: ChatProvider,
+    models: ModelConfig,
+    cases: list[GoldenCase],
+    *,
+    dept: str = EVAL_DEPT,
+    role: str = EVAL_ROLE,
+    top_k: int = 5,
+) -> AnswerEvalSummary:
+    """Measure the grounded answer path: latency, cost, and judge verdicts.
+
+    Runs the same retrieve -> ground -> stream sequence the chat endpoint uses,
+    timing the first token and the full answer and pricing the call from the
+    served model. Skipping persistence keeps the eval out of conversation
+    history. A judge model grades each answer against the context it was given.
+    """
+    grounding_model = models.models["grounding"]
+    judge_model = models.models["judge"]
+    results: list[AnswerCaseResult] = []
+    for case in cases:
+        chunks = await retriever.retrieve(case.prompt, dept=dept, role=role, top_k=top_k)
+        messages, _version = build_grounding_messages(case.prompt, chunks)
+        tokens_in = estimate_tokens("".join(message.content for message in messages))
+
+        started = perf_counter()
+        first_token_s = 0.0
+        parts: list[str] = []
+        async for token in provider.stream(grounding_model, messages):
+            if not parts:
+                first_token_s = perf_counter() - started
+            parts.append(token)
+        latency_s = perf_counter() - started
+        answer = "".join(parts)
+
+        tokens_out = estimate_tokens(answer)
+        cost = float(
+            compute_cost(provider.effective_model(grounding_model), tokens_in, tokens_out)
+        )
+        judged = await judge_answer(
+            provider, judge_model, case.prompt, answer, build_context(chunks)
+        )
+        results.append(
+            AnswerCaseResult(
+                prompt=case.prompt,
+                answer=answer,
+                first_token_s=first_token_s,
+                latency_s=latency_s,
+                cost_usd=cost,
+                judged_correct=judged,
+            )
+        )
+    return AnswerEvalSummary(results=results)
 
 
 async def _main() -> None:
