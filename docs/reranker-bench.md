@@ -35,18 +35,26 @@ The script reports p50 and p95 latency per (model, batch size).
 
 ## Decision
 
-**Status: provisional — timing run pending.** The benchmark has not been
-executed against the actual demo-tier CPU yet; the local run was deferred to
-avoid a multi-gigabyte model download in the development environment, and the
-real number must come from the demo host anyway.
+**Status: decided — cross-encoder off for the MVP.**
 
-Provisional guidance for the retrieval stage:
+Measured on one pinned core against the 168-chunk synthetic corpus
+(`BAAI/bge-reranker-base`, 10 rounds per query, 5 queries):
 
-- Start with `BAAI/bge-reranker-base` (278M). It is the safer default on a
-  shared-vCPU host.
-- If rerank latency alone would exceed ~600ms of the first-token budget, drop
-  the cross-encoder stage for the MVP and rely on hybrid retrieval top-k only.
-- Upgrade to `BAAI/bge-reranker-v2-m3` only if the demo host has headroom.
+| Batch | p50 | p95 | mean |
+|---|---|---|---|
+| top-20 | 1857ms | 1983ms | 1852ms |
+| top-30 | 2769ms | 2998ms | 2774ms |
 
-Re-run the benchmark during retrieval implementation and update this file with
-the measured numbers and the final decision.
+`BAAI/bge-reranker-v2-m3` was not run: it is the larger, slower model, so it
+cannot beat these numbers on the same host.
+
+Both batch sizes exceed the ~600ms re-rank budget, and top-30 also exceeds the
+2.5s first-token budget on its own. The cross-encoder stage therefore stays out
+of the MVP answer path: retrieval uses hybrid top-k ranking only, and the
+`CrossEncoderReranker` seam remains available for a host with CPU headroom. A
+GPU-backed host is the only realistic way to bring a cross-encoder inside the
+first-token budget, so this is revisited if the demo moves to GPU.
+
+The number must be re-confirmed on the actual demo host before any reranker is
+enabled there.
+
