@@ -2,6 +2,8 @@
 
 import { useId, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { PixelCursor } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
@@ -49,6 +51,10 @@ export type ChatMessage = {
      finalized turn, so a completed answer never re-runs its entrance. */
   uid?: string;
 };
+
+function stripCitations(content: string): string {
+  return content.replace(/\[\d+\](?!\()/g, "");
+}
 
 const TAB_LABELS = {
   sources: "Sources",
@@ -134,9 +140,7 @@ export function SourcePanel({
                           style={{ background: docketDot(i) }}
                         />
                         <div className="min-w-0">
-                          <p className="truncate font-medium">
-                            {source.section_anchor}
-                          </p>
+                          <p className="truncate font-medium">{source.section_anchor}</p>
                           <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                             {source.source_uri}
                           </p>
@@ -146,16 +150,13 @@ export function SourcePanel({
                   ))}
                 </ul>
               ) : (
-                <p className="text-muted-foreground">
-                  No sources recorded for this answer.
-                </p>
+                <p className="text-muted-foreground">No sources recorded for this answer.</p>
               ))}
             {tab === "sql" &&
               (sql ? (
                 <div>
                   <p className="text-muted-foreground">
-                    {sql.row_count} row{sql.row_count === 1 ? "" : "s"} in{" "}
-                    {sql.latency_ms}ms
+                    {sql.row_count} row{sql.row_count === 1 ? "" : "s"} in {sql.latency_ms}ms
                     {sql.truncated ? " (truncated)" : ""}
                   </p>
                   <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
@@ -163,9 +164,7 @@ export function SourcePanel({
                   </pre>
                 </div>
               ) : (
-                <p className="text-muted-foreground">
-                  No live data query for this answer.
-                </p>
+                <p className="text-muted-foreground">No live data query for this answer.</p>
               ))}
             {tab === "trace" && (
               <p className="break-all font-mono text-[11px] text-muted-foreground">
@@ -212,7 +211,11 @@ export function Transcript({
             className="text-[16px] leading-relaxed"
           >
             {message.content ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <div className="prose prose-neutral max-w-none whitespace-pre-wrap prose-headings:font-semibold prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-muted prose-pre:p-3 prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-a:text-brand-vermilion prose-a:underline prose-a:underline-offset-2">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {stripCitations(message.content)}
+                </ReactMarkdown>
+              </div>
             ) : (
               <PixelCursor />
             )}
