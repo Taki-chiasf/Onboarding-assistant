@@ -206,17 +206,19 @@ async def _run_suites(
             )
             sql_summary = await run_sql_eval(sql_builder, executor, sql_cases, personas=PERSONAS)
 
-            embed_provider = provider if not keyless else FakeProvider()
-
             async def embed(texts: list[str]) -> list[list[float]]:
-                return await embed_provider.embed(models.models["embed"], texts)
+                return await provider.embed(models.models["embed"], texts)
 
             corpus_ready = await _corpus_ready(engine)
-            retriever = Retriever(engine, embed) if corpus_ready else None
+            # Retrieval compares the query embedding with the stored chunk
+            # embeddings, so it is only meaningful when the same provider
+            # embedded the corpus. Keyless runs use canned vectors and would
+            # grade an invalid positive control, so they skip retrieval.
+            retriever = Retriever(engine, embed) if (corpus_ready and not keyless) else None
             security_summary = await run_security_canaries(
                 router=router, executor=executor, retriever=retriever
             )
-            if retriever is not None and not keyless:
+            if retriever is not None:
                 from app.eval.golden import build_golden_set
                 from app.eval.rag_eval import run_answer_eval, run_retrieval_eval
 
