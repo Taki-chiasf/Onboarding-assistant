@@ -18,6 +18,8 @@ from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.principal import Principal
+from app.core.moderation import record_screen, screen
+from app.llm.provider import ChatProvider
 from app.models import Conversation, Message
 from app.rag.answer import RagAnswerer
 from app.router.router import IntentRouter
@@ -65,10 +67,13 @@ class ChatDispatcher:
         router: IntentRouter,
         rag: RagAnswerer,
         sql: SqlAnswerer,
+        *,
+        moderation: tuple[ChatProvider, str] | None = None,
     ) -> None:
         self._router = router
         self._rag = rag
         self._sql = sql
+        self._moderation = moderation
         self._session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def stream(
@@ -85,6 +90,11 @@ class ChatDispatcher:
         with tracer.start_as_current_span("dispatch") as span:
             span.set_attribute("user.dept", principal.dept)
             span.set_attribute("user.role", principal.role)
+
+            if self._moderation is not None:
+                provider, moderation_model = self._moderation
+                result = await screen(provider, moderation_model, query)
+                record_screen(result, where="prompt", subject=principal.sub)
 
             decision = pinned_decision(surface) if surface else await self._router.decide(query)
             span.set_attribute("route.intent", decision.intent.value)

@@ -5,6 +5,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.auth.principal import Principal
+from app.core.moderation import ScreenResult
+from app.llm.fake import FakeProvider
+from app.llm.provider import ModerationVerdict
 from app.rag.answer import RagAnswerer
 from app.router import dispatcher as dispatcher_mod
 from app.router.dispatcher import REFUSAL, ChatDispatcher, pinned_decision
@@ -215,3 +218,49 @@ def test_pinned_decision_maps_surface_to_intent() -> None:
     assert pinned_decision(Surface.RAG_DOCS).intent == Intent.RAG_DOCS
     assert pinned_decision(Surface.RAG_CODE).intent == Intent.RAG_CODE
     assert pinned_decision(Surface.TEXT_TO_SQL).intent == Intent.TEXT_TO_SQL
+
+
+async def test_screens_user_input_and_records_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    recorded: list[tuple[str, str, ScreenResult]] = []
+    monkeypatch.setattr(
+        dispatcher_mod,
+        "record_screen",
+        lambda result, *, where, subject: recorded.append((where, subject, result)),
+    )
+    rag, sql = _FakeRag(), _FakeSql()
+    provider = FakeProvider(
+        moderate_fn=lambda text: ModerationVerdict(flagged=True, categories=("pii",))
+    )
+    dispatcher = ChatDispatcher(
+        MagicMock(),
+        cast(IntentRouter, _FakeRouter(_decision(Intent.RAG_DOCS))),
+        cast(RagAnswerer, rag),
+        cast(SqlAnswerer, sql),
+        moderation=(provider, "mistral-moderation-2603"),
+    )
+
+    _ = [e async for e in dispatcher.stream("policy?", _principal())]
+
+    assert rag.calls == 1
+    assert len(recorded) == 1
+    where, subject, result = recorded[0]
+    assert where == "prompt"
+    assert subject == "alex"
+    assert result.flagged is True
+
+
+async def test_no_screen_without_moderation_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    recorded: list[object] = []
+    monkeypatch.setattr(
+        dispatcher_mod, "record_screen", lambda result, *, where, subject: recorded.append(result)
+    )
+    rag, sql = _FakeRag(), _FakeSql()
+    dispatcher = _dispatcher(_FakeRouter(_decision(Intent.RAG_DOCS)), rag, sql)
+
+    _ = [e async for e in dispatcher.stream("policy?", _principal())]
+
+    assert recorded == []

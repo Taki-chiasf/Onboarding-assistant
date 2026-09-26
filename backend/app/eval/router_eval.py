@@ -14,6 +14,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from app.core.redact import redact_pii
 from app.eval.router_golden import RouterCase, build_router_set
 from app.llm.fake import FakeProvider
 from app.llm.provider import ChatMessage
@@ -147,7 +148,9 @@ async def _main() -> None:
     logger.info("  ambiguous boundary: %d/%d", correct, total)
     for result in summary.results:
         if not result.correct:
-            logger.info("  fail: %s -> %s", result.prompt, result.actual)
+            logger.info(
+                "  fail: %s -> %s", redact_pii(result.prompt), redact_pii(result.actual or "")
+            )
 
 
 def main() -> None:

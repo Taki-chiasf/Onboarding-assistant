@@ -9,6 +9,10 @@ def test_redact_pii_replaces_phone() -> None:
     assert redact_pii("call +1 555 123 4567 now") == "call [phone] now"
 
 
+def test_redact_pii_replaces_ip_address() -> None:
+    assert redact_pii("host 10.0.0.5 is down") == "host [ip] is down"
+
+
 def test_redact_pii_allows_caller_email() -> None:
     text = "reach out to alice@example.com or bob@corp.com"
     redacted = redact_pii(text, allow=["alice@example.com"])

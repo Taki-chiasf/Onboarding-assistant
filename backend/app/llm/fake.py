@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 
-from app.llm.provider import ChatMessage, JsonSchema
+from app.llm.provider import ChatMessage, JsonSchema, ModerationVerdict
 
 ChatFn = Callable[[str, Sequence[ChatMessage]], str]
+ModerateFn = Callable[[str], ModerationVerdict]
 
 
 class FakeProvider:
@@ -24,11 +25,13 @@ class FakeProvider:
         *,
         chat_fn: ChatFn | None = None,
         structured: Mapping[str, str] | None = None,
+        moderate_fn: ModerateFn | None = None,
         default: str = "",
     ) -> None:
         self._responses = dict(responses or {})
         self._structured = dict(structured or {})
         self._chat_fn = chat_fn
+        self._moderate_fn = moderate_fn
         self._default = default
 
     def _chat(self, model: str, messages: Sequence[ChatMessage]) -> str:
@@ -58,6 +61,11 @@ class FakeProvider:
 
     async def embed(self, model: str, texts: Sequence[str]) -> list[list[float]]:
         return [self._embed_one(text) for text in texts]
+
+    async def moderate(self, model: str, texts: Sequence[str]) -> list[ModerationVerdict]:
+        if self._moderate_fn is None:
+            return [ModerationVerdict(flagged=False) for _ in texts]
+        return [self._moderate_fn(text) for text in texts]
 
     @staticmethod
     def _tokenize(text: str, chunk: int = 4) -> list[str]:

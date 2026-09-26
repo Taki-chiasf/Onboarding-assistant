@@ -17,6 +17,7 @@ from app.ingest.pipeline import (
     source_type_for,
 )
 from app.llm import MistralProvider
+from app.llm.provider import ModerationVerdict
 from app.rag import Chunk, content_hash
 
 
@@ -109,9 +110,7 @@ def test_plan_upsert_updates_changed_content() -> None:
 
 async def test_embed_chunks_batches_and_maps() -> None:
     provider = MagicMock(spec=MistralProvider)
-    provider.embed = AsyncMock(
-        side_effect=lambda model, texts: [[float(len(t))] for t in texts]
-    )
+    provider.embed = AsyncMock(side_effect=lambda model, texts: [[float(len(t))] for t in texts])
     chunks = [_chunk(0, "a"), _chunk(1, "b"), _chunk(2, "c")]
 
     embeddings = await embed_chunks(provider, "mistral-embed", chunks, batch_size=2)
@@ -168,11 +167,14 @@ async def test_ingest_files_inserts_chunks(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(
         pipeline_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit: (lambda: session),
+        lambda engine, expire_on_commit: lambda: session,
     )
 
     stats = await ingest_files(
-        MagicMock(), _fake_provider(), "mistral-embed", "mistral-ocr-4-0",
+        MagicMock(),
+        _fake_provider(),
+        "mistral-embed",
+        "mistral-ocr-4-0",
         [_markdown_file(tmp_path)],
     )
 
@@ -183,6 +185,53 @@ async def test_ingest_files_inserts_chunks(tmp_path: Path, monkeypatch: pytest.M
     assert stats.embedded == stats.inserted
     assert session.committed
     assert len(session.added) == stats.inserted
+
+
+async def test_ingest_files_counts_flagged_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _FakeSession([])
+    monkeypatch.setattr(
+        pipeline_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit: lambda: session,
+    )
+    provider = _fake_provider()
+    provider.moderate = AsyncMock(
+        return_value=[ModerationVerdict(flagged=True, categories=("pii",))]
+    )
+
+    stats = await ingest_files(
+        MagicMock(),
+        provider,
+        "mistral-embed",
+        "mistral-ocr-4-0",
+        [_markdown_file(tmp_path)],
+        moderation_model="mistral-moderation-2603",
+    )
+
+    assert stats.flagged == 1
+    provider.moderate.assert_awaited_once()
+
+
+async def test_ingest_files_skips_screen_when_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _FakeSession([])
+    monkeypatch.setattr(
+        pipeline_mod,
+        "async_sessionmaker",
+        lambda engine, expire_on_commit: lambda: session,
+    )
+    provider = _fake_provider()
+    provider.moderate = AsyncMock()
+
+    stats = await ingest_files(
+        MagicMock(), provider, "mistral-embed", "mistral-ocr-4-0", [_markdown_file(tmp_path)]
+    )
+
+    assert stats.flagged == 0
+    provider.moderate.assert_not_awaited()
 
 
 async def test_ingest_files_skips_unchanged(
@@ -203,7 +252,7 @@ async def test_ingest_files_skips_unchanged(
     monkeypatch.setattr(
         pipeline_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit: (lambda: session),
+        lambda engine, expire_on_commit: lambda: session,
     )
 
     stats = await ingest_files(
@@ -230,7 +279,7 @@ async def test_ingest_continues_past_an_unreadable_document(
     monkeypatch.setattr(
         pipeline_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit: (lambda: session),
+        lambda engine, expire_on_commit: lambda: session,
     )
     provider = _fake_provider()
     provider.ocr_pdf = AsyncMock(side_effect=RuntimeError("ocr unavailable"))
@@ -256,7 +305,7 @@ async def test_ingest_marks_a_file_unreadable_when_it_cannot_be_decoded(
     monkeypatch.setattr(
         pipeline_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit: (lambda: session),
+        lambda engine, expire_on_commit: lambda: session,
     )
     path = tmp_path / "policies" / "bad.md"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -5,7 +5,7 @@ COMPOSE := docker compose --project-directory . -f infra/docker-compose.yml
 
 .PHONY: help up down obs logs ps seed ingest eval demo-reset \
         install backend-install web-install \
-        lint fmt typecheck test test-backend test-web
+        lint fmt typecheck test test-backend test-web retention pii-scan
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -36,6 +36,12 @@ eval: ## Run the eval gates against the current database
 
 demo-reset: ## Reset demo data and clear conversation history
 	$(COMPOSE) run --rm db-seed --reset
+
+retention: ## Delete audit logs and eval records past the retention window
+	$(COMPOSE) run --rm worker python -m app.retention
+
+pii-scan: ## Scan the repository for non-synthetic PII
+	cd backend && uv run python -m scripts.pii_scan
 
 install: backend-install web-install ## Install all dependencies
 

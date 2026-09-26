@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from app.llm.fake import FakeProvider
-from app.llm.provider import ChatMessage
+from app.llm.provider import ChatMessage, ModerationVerdict
 
 
 async def test_chat_returns_canned_response_by_model() -> None:
@@ -42,3 +42,21 @@ async def test_embed_is_deterministic_and_distinct() -> None:
     assert len(first[0]) == 1024
     assert first == second
     assert first[0] != first[1]
+
+
+async def test_moderate_defaults_to_not_flagged() -> None:
+    verdicts = await FakeProvider().moderate("m", ["a", "b"])
+    assert len(verdicts) == 2
+    assert all(not verdict.flagged for verdict in verdicts)
+
+
+async def test_moderate_fn_marks_each_text() -> None:
+    provider = FakeProvider(
+        moderate_fn=lambda text: ModerationVerdict(
+            flagged=text == "bad", categories=("pii",) if text == "bad" else ()
+        )
+    )
+    verdicts = await provider.moderate("m", ["bad", "good"])
+    assert verdicts[0].flagged
+    assert verdicts[0].categories == ("pii",)
+    assert not verdicts[1].flagged

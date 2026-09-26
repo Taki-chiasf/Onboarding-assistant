@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from app.llm.provider import ChatMessage, JsonSchema
+from app.llm.provider import ChatMessage, JsonSchema, ModerationVerdict
 
 DEFAULT_TIMEOUT = 120.0
 
@@ -93,3 +93,8 @@ class LocalProvider:
                 text = _content(json.loads(line))
                 if text:
                     yield text
+
+    async def moderate(self, model: str, texts: Sequence[str]) -> list[ModerationVerdict]:
+        # Local open weights do not serve a moderation classifier; the screen
+        # degrades to unchecked so a local run never blocks on it.
+        return [ModerationVerdict(flagged=False) for _ in texts]

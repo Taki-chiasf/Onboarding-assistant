@@ -16,6 +16,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from app.core.moderation import record_screen, screen
 from app.ingest.ocr import ocr_pdf_markdown
 from app.llm.provider import MistralProvider
 from app.models import DocChunk
@@ -67,6 +68,7 @@ class IngestStats:
     skipped: int
     embedded: int
     failed: int = 0
+    flagged: int = 0
 
 
 def source_type_for(category: str) -> str:
@@ -102,9 +104,7 @@ def chunk_file(corpus_file: CorpusFile, markdown: str) -> list[Chunk]:
     )
 
 
-def plan_upsert(
-    existing: dict[int, tuple[uuid.UUID, str, int]], chunks: list[Chunk]
-) -> UpsertPlan:
+def plan_upsert(existing: dict[int, tuple[uuid.UUID, str, int]], chunks: list[Chunk]) -> UpsertPlan:
     to_insert: list[Chunk] = []
     to_update: list[tuple[uuid.UUID, Chunk, int]] = []
     skipped = 0
@@ -142,6 +142,8 @@ async def ingest_files(
     embed_model: str,
     ocr_model: str,
     files: list[CorpusFile],
+    *,
+    moderation_model: str | None = None,
 ) -> IngestStats:
     stats = IngestStats(files=len(files), inserted=0, updated=0, skipped=0, embedded=0)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -162,14 +164,20 @@ async def ingest_files(
                 logger.exception("failed to read corpus file: %s", corpus_file.path.name)
                 stats.failed += 1
                 continue
+
+            if moderation_model is not None:
+                verdict = await screen(provider, moderation_model, markdown)
+                if verdict.flagged:
+                    stats.flagged += 1
+                    record_screen(verdict, where="ingest", subject=corpus_file.source_uri)
+
             chunks = chunk_file(corpus_file, markdown)
 
             result = await session.execute(
                 select(DocChunk).where(DocChunk.source_uri == corpus_file.source_uri)
             )
             existing = {
-                row.chunk_index: (row.id, row.content_hash, row.version)
-                for row in result.scalars()
+                row.chunk_index: (row.id, row.content_hash, row.version) for row in result.scalars()
             }
             plan = plan_upsert(existing, chunks)
             stats.skipped += plan.skipped

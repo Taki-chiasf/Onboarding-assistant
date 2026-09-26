@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from mistralai.client import Mistral
@@ -32,6 +33,14 @@ class ChatMessage(BaseModel):
     content: str
 
 
+@dataclass(frozen=True)
+class ModerationVerdict:
+    """The moderation outcome for one input: whether it was flagged, and why."""
+
+    flagged: bool
+    categories: tuple[str, ...] = ()
+
+
 class ChatProvider(Protocol):
     def effective_model(self, model: str) -> str:
         """Return the model that served, or will serve, the given configured id."""
@@ -44,6 +53,8 @@ class ChatProvider(Protocol):
     async def chat_structured(
         self, model: str, messages: Sequence[ChatMessage], schema: JsonSchema
     ) -> str: ...
+
+    async def moderate(self, model: str, texts: Sequence[str]) -> list[ModerationVerdict]: ...
 
 
 def _to_sdk_message(message: ChatMessage) -> AssistantMessage | SystemMessage | UserMessage:
@@ -113,6 +124,7 @@ class MistralProvider:
             return await self._attempt(lambda: call(model), model)
         last: Exception | None = None
         for candidate in self._resolver.chain(model):
+
             async def attempt(bound: str = candidate) -> T:
                 return await call(bound)
 
@@ -227,6 +239,20 @@ class MistralProvider:
                 if item.embedding is not None:
                     embeddings.append(item.embedding)
             return embeddings
+
+        return await self._with_fallback(model, call)
+
+    async def moderate(self, model: str, texts: Sequence[str]) -> list[ModerationVerdict]:
+        async def call(candidate: str) -> list[ModerationVerdict]:
+            response = await self._client.classifiers.moderate_async(
+                model=candidate, inputs=list(texts)
+            )
+            verdicts: list[ModerationVerdict] = []
+            for result in response.results:
+                categories = getattr(result, "categories", {}) or {}
+                flagged = tuple(name for name, value in categories.items() if value)
+                verdicts.append(ModerationVerdict(flagged=bool(flagged), categories=flagged))
+            return verdicts
 
         return await self._with_fallback(model, call)
 

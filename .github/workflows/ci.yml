@@ -54,6 +54,10 @@ jobs:
         working-directory: backend
         run: uv run ruff check .
 
+      - name: PII scan
+        working-directory: backend
+        run: uv run python -m scripts.pii_scan
+
       - name: Typecheck
         working-directory: backend
         run: uv run mypy .

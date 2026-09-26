@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     daily_token_budget: int = 200_000
     daily_cost_alert_usd: float = 1.0
 
+    # Moderation screen over user input and ingested content. It never blocks;
+    # it flags abuse/personal data for the redaction layer and observability.
+    moderation_enabled: bool = True
+
+    # Retention window for query audit logs and eval-run records.
+    retention_days: int = 90
+
     sql_readonly_role: str = "app_readonly"
     sql_statement_timeout_ms: int = 5000
     sql_max_rows: int = 100

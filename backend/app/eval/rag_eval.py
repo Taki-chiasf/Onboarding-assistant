@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from time import perf_counter
 
+from app.core.redact import redact_pii
 from app.eval.golden import GoldenCase, build_golden_set, recall_at_k
 from app.llm.models import ModelConfig, load_models
 from app.llm.pricing import compute_cost, estimate_tokens
@@ -154,9 +155,7 @@ async def run_answer_eval(
         answer = "".join(parts)
 
         tokens_out = estimate_tokens(answer)
-        cost = float(
-            compute_cost(provider.effective_model(grounding_model), tokens_in, tokens_out)
-        )
+        cost = float(compute_cost(provider.effective_model(grounding_model), tokens_in, tokens_out))
         judged = await judge_answer(
             provider, judge_model, case.prompt, answer, build_context(chunks)
         )
@@ -201,7 +200,7 @@ async def _main() -> None:
     )
     for result in summary.results:
         if not result.hit:
-            logger.info("miss: %s", result.prompt)
+            logger.info("miss: %s", redact_pii(result.prompt))
 
 
 def main() -> None:

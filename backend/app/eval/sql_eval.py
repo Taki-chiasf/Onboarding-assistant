@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.redact import redact_pii
 from app.eval.sql_golden import PERSONAS, SqlCase, build_sql_set
 from app.llm.provider import ChatMessage
 from app.text_to_sql.builder import SqlBuilder
@@ -169,7 +170,11 @@ async def _main() -> None:
     for result in summary.results:
         if not result.correct:
             logger.info(
-                "fail: %s [%s/%s] %s", result.prompt, result.dept, result.role, result.error or ""
+                "fail: %s [%s/%s] %s",
+                redact_pii(result.prompt),
+                result.dept,
+                result.role,
+                redact_pii(result.error or ""),
             )
 
 

@@ -66,6 +66,8 @@ services:
       DEV_PRINCIPAL_ROLE: ${DEV_PRINCIPAL_ROLE:-employee}
       DAILY_TOKEN_BUDGET: ${DAILY_TOKEN_BUDGET:-200000}
       DAILY_COST_ALERT_USD: ${DAILY_COST_ALERT_USD:-1.0}
+      MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
     ports:
       - "8000:8000"
     depends_on:
@@ -82,6 +84,8 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
       REDIS_URL: redis://redis:6379/0
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
     depends_on:
       db:
         condition: service_healthy

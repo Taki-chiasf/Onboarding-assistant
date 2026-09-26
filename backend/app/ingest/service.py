@@ -19,6 +19,7 @@ async def run_ingest() -> dict[str, int]:
 
     models = load_models()
     engine = create_async_engine(settings.database_url)
+    moderation_model = models.models["moderation"] if settings.moderation_enabled else None
     try:
         stats = await ingest_files(
             engine,
@@ -26,6 +27,7 @@ async def run_ingest() -> dict[str, int]:
             models.models["embed"],
             models.models["ocr"],
             iter_corpus(CORPUS_ROOT),
+            moderation_model=moderation_model,
         )
     finally:
         await engine.dispose()
@@ -37,4 +39,5 @@ async def run_ingest() -> dict[str, int]:
         "skipped": stats.skipped,
         "embedded": stats.embedded,
         "failed": stats.failed,
+        "flagged": stats.flagged,
     }

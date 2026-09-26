@@ -66,7 +66,8 @@ def _build_orchestrator(engine: AsyncEngine) -> ChatDispatcher:
     )
     sql = SqlAnswerer(engine, provider, models, executor)
     intent_router = IntentRouter(get_router_provider(), _router_model(models))
-    return ChatDispatcher(engine, intent_router, rag, sql)
+    moderation = (provider, models.models["moderation"]) if settings.moderation_enabled else None
+    return ChatDispatcher(engine, intent_router, rag, sql, moderation=moderation)
 
 
 def get_chat_orchestrator(request: Request) -> ChatDispatcher:
