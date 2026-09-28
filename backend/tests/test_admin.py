@@ -1,4 +1,5 @@
 import os
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -19,26 +20,45 @@ from app.api.admin import get_session_factory
 from app.core.budget import cost_window
 from app.core.config import get_settings
 from app.main import create_app
-from app.models import CostLedger
+from app.models import CostLedger, EvalCase, Feedback, Message
+
+
+class _Scalars:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return list(self._rows)
 
 
 class _Rows:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+    def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
-    def all(self) -> list[tuple[Any, ...]]:
+    def all(self) -> list[Any]:
         return self._rows
 
-    def one(self) -> tuple[Any, ...]:
+    def one(self) -> Any:
         return self._rows[0]
+
+    def scalars(self) -> _Scalars:
+        return _Scalars(self._rows)
 
 
 class _StubSession:
-    def __init__(self, results: list[_Rows]) -> None:
+    def __init__(self, results: list[_Rows], *, get_result: Any = None) -> None:
         self._results = list(results)
+        self._get_result = get_result
+        self.committed = False
 
     async def execute(self, statement: object) -> _Rows:
         return self._results.pop(0)
+
+    async def get(self, model: Any, ident: Any) -> Any:
+        return self._get_result
+
+    async def commit(self) -> None:
+        self.committed = True
 
     async def __aenter__(self) -> "_StubSession":
         return self
@@ -204,3 +224,214 @@ async def test_cost_summary_reports_ledger_rows(
         async with factory() as session:
             await session.execute(delete(CostLedger).where(CostLedger.user_id == "admin-live-user"))
             await session.commit()
+
+
+def _review_case(*, status: str = "review", source_message_id: uuid.UUID | None = None) -> EvalCase:
+    return EvalCase(
+        id=uuid.uuid4(),
+        prompt="How much leave do I get?",
+        status=status,
+        source="thumbs_down",
+        source_message_id=source_message_id,
+        tags=["feedback", "dept:Engineering"],
+        created_at=datetime(2026, 9, 28, 12, 0, tzinfo=UTC),
+    )
+
+
+async def test_review_queue_forbids_non_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="employee")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/api/admin/review")
+    assert resp.status_code == 403
+    get_settings.cache_clear()
+
+
+async def test_review_queue_needs_a_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/api/admin/review")
+    assert resp.status_code == 503
+    get_settings.cache_clear()
+
+
+async def test_review_queue_serializes_the_filed_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    message = Message(
+        id=uuid.uuid4(),
+        conversation_id=uuid.uuid4(),
+        role="assistant",
+        content="16 weeks",
+        trace_id="trace-9",
+        detail={"route": {"intent": "rag-docs"}},
+        created_at=datetime(2026, 9, 28, 12, 1, tzinfo=UTC),
+    )
+    case = _review_case(source_message_id=message.id)
+    feedback = Feedback(
+        message_id=message.id,
+        rating="down",
+        correction="missing the policy citation",
+        source="real",
+        trace_id="trace-9",
+    )
+    session = _StubSession([_Rows([case]), _Rows([feedback]), _Rows([message])])
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/admin/review")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    body = resp.json()["cases"][0]
+    assert body["id"] == str(case.id)
+    assert body["prompt"] == "How much leave do I get?"
+    assert body["rating"] == "down"
+    assert body["correction"] == "missing the policy citation"
+    assert body["message_id"] == str(message.id)
+    assert body["trace_id"] == "trace-9"
+    assert body["detail"] == {"route": {"intent": "rag-docs"}}
+    assert body["created_at"].startswith("2026-09-28T12:00")
+    get_settings.cache_clear()
+
+
+async def test_review_queue_is_empty_without_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    session = _StubSession([_Rows([])])
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/api/admin/review")
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    assert resp.json() == {"cases": []}
+    get_settings.cache_clear()
+
+
+async def test_promote_requires_an_expectation(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    case = _review_case()
+    session = _StubSession([], get_result=case)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(f"/api/admin/review/{case.id}/promote", json={})
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 422
+    assert case.status == "review"
+    get_settings.cache_clear()
+
+
+async def test_promote_rejects_an_invalid_regex(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    case = _review_case()
+    session = _StubSession([], get_result=case)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(
+                f"/api/admin/review/{case.id}/promote",
+                json={"expected_sql_pattern": "SELECT ("},
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 422
+    assert case.status == "review"
+    get_settings.cache_clear()
+
+
+async def test_promote_marks_the_case_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(
+        monkeypatch,
+        MOCK_OIDC="1",
+        DEV_PRINCIPAL_ROLE="admin",
+        DEV_PRINCIPAL_EMAIL="admin@example.com",
+    )
+    case = _review_case()
+    session = _StubSession([], get_result=case)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(
+                f"/api/admin/review/{case.id}/promote",
+                json={
+                    "expected_intent": "rag-docs",
+                    "expected_source_ids": ["chunk-1"],
+                    "expected_sql_pattern": r"org_members.*role\s*=\s*'manager'",
+                    "expected_rows_predicate": "count>=1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "id": str(case.id),
+        "status": "promoted",
+        "reviewed_by": "admin@example.com",
+    }
+    assert case.status == "promoted"
+    assert case.expected_intent == "rag-docs"
+    assert case.expected_source_ids == ["chunk-1"]
+    assert case.expected_sql_pattern == r"org_members.*role\s*=\s*'manager'"
+    assert case.expected_rows_predicate == "count>=1"
+    assert case.reviewed_by == "admin@example.com"
+    assert session.committed is True
+    get_settings.cache_clear()
+
+
+async def test_promote_conflicts_outside_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    case = _review_case(status="promoted")
+    session = _StubSession([], get_result=case)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(
+                f"/api/admin/review/{case.id}/promote",
+                json={"expected_intent": "rag-docs"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 409
+    get_settings.cache_clear()
+
+
+async def test_promote_reports_a_missing_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
+    session = _StubSession([], get_result=None)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(
+                f"/api/admin/review/{uuid.uuid4()}/promote",
+                json={"expected_intent": "rag-docs"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 404
+    get_settings.cache_clear()
+
+
+async def test_reject_marks_the_case(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app(
+        monkeypatch,
+        MOCK_OIDC="1",
+        DEV_PRINCIPAL_ROLE="admin",
+        DEV_PRINCIPAL_EMAIL="admin@example.com",
+    )
+    case = _review_case()
+    session = _StubSession([], get_result=case)
+    app.dependency_overrides[get_session_factory] = lambda: lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.post(f"/api/admin/review/{case.id}/reject")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected"
+    assert case.status == "rejected"
+    assert case.reviewed_by == "admin@example.com"
+    get_settings.cache_clear()

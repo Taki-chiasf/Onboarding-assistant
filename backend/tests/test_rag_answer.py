@@ -164,3 +164,17 @@ async def test_stream_passes_source_type_restriction(monkeypatch: pytest.MonkeyP
     _ = [e async for e in answerer.stream("deploy", _principal(), source_types=("engineering",))]
 
     assert retriever.source_types == ("engineering",)
+
+
+async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    answerer, _ = _answerer(_FakeProvider(["ok"]), [_chunk()])
+    route = {"intent": "rag-code", "route_source": "router", "router_confidence": 0.8}
+
+    _ = [e async for e in answerer.stream("deploy", _principal(), route=route)]
+
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert assistant[0].detail is not None
+    assert assistant[0].detail["route"] == route
+    assert assistant[0].detail["sources"][0]["id"] == "chunk-1"

@@ -105,15 +105,11 @@ class _StubMessage:
         self.detail = detail
 
 
-class _StubResult:
-    def __init__(self, rows: list[Any]) -> None:
-        self._rows = rows
-
-    def scalars(self) -> "_StubScalars":
-        return _StubScalars(self._rows)
-
-    def scalar_one_or_none(self) -> Any:
-        return self._rows[0] if self._rows else None
+class _StubFeedback:
+    def __init__(self, message_id: uuid.UUID, rating: str, correction: str | None) -> None:
+        self.message_id = message_id
+        self.rating = rating
+        self.correction = correction
 
 
 class _StubScalars:
@@ -121,15 +117,26 @@ class _StubScalars:
         self._rows = rows
 
     def all(self) -> list[Any]:
-        return self._rows
+        return list(self._rows)
 
 
-class _StubSession:
+class _StubResult:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
+    def scalars(self) -> _StubScalars:
+        return _StubScalars(self._rows)
+
+    def scalar_one_or_none(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+
+class _StubSession:
+    def __init__(self, results: list[Any]) -> None:
+        self._results = list(results)
+
     async def execute(self, statement: object) -> _StubResult:
-        return _StubResult(self._rows)
+        return _StubResult([self._results.pop(0)])
 
     async def __aenter__(self) -> "_StubSession":
         return self
@@ -141,15 +148,19 @@ class _StubSession:
 async def test_messages_endpoint_returns_evidence(
     app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Assistant evidence (sources, sql) and the trace id must survive a reload
-    so the panel renders again from history."""
+    """Assistant evidence (sources, sql), the caller's feedback state, and the
+    trace id must survive a reload so the panel and the rating render again
+    from history."""
     app.state.engine = None
     detail = {"sources": [{"id": "chunk-1", "source_uri": "file:docs/a.md"}]}
-    stub = _StubMessage(detail)
+    message = _StubMessage(detail)
+    feedback = _StubFeedback(message.id, "down", "missing the policy citation")
     monkeypatch.setattr(
         chat_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit=False: lambda: _StubSession([stub]),
+        lambda engine, expire_on_commit=False: (
+            lambda: _StubSession([uuid.uuid4(), message, feedback])
+        ),
     )
 
     resp = await client.get(f"/api/conversations/{uuid.uuid4()}/messages")
@@ -158,6 +169,10 @@ async def test_messages_endpoint_returns_evidence(
     row = resp.json()[0]
     assert row["detail"] == detail
     assert row["trace_id"] == "trace-abc"
+    assert row["feedback"] == {
+        "rating": "down",
+        "correction": "missing the policy citation",
+    }
 
 
 async def test_messages_endpoint_hides_other_users_conversation(
@@ -168,7 +183,7 @@ async def test_messages_endpoint_hides_other_users_conversation(
     monkeypatch.setattr(
         chat_mod,
         "async_sessionmaker",
-        lambda engine, expire_on_commit=False: lambda: _StubSession([]),
+        lambda engine, expire_on_commit=False: lambda: _StubSession([None]),
     )
 
     resp = await client.get(f"/api/conversations/{uuid.uuid4()}/messages")
@@ -246,6 +261,7 @@ async def test_conversation_list_and_history_use_orm_session(
         assert [m["content"] for m in history.json()] == ["hello", "hi"]
         assert history.json()[1]["detail"] == detail
         assert history.json()[1]["trace_id"] == "trace-live"
+        assert history.json()[1]["feedback"] is None
     finally:
         async with factory() as session:
             await session.execute(delete(Message).where(Message.id.in_([msg_id, answer_id])))

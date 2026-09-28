@@ -91,6 +91,8 @@ class SqlAnswerer:
         query: str,
         principal: Principal,
         conversation_id: uuid.UUID | None = None,
+        *,
+        route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         trace_id = uuid.uuid4().hex
         started = perf_counter()
@@ -167,6 +169,7 @@ class SqlAnswerer:
                 tokens_out,
                 summary_cost,
                 sql_detail,
+                route,
             )
 
             span.set_attribute("answer.row_count", len(result.rows))
@@ -232,8 +235,12 @@ class SqlAnswerer:
         tokens_out: int,
         summary_cost: Decimal,
         sql_detail: SqlEvent,
+        route: dict[str, Any] | None = None,
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
+        detail: dict[str, Any] = {"sql": asdict(sql_detail)}
+        if route is not None:
+            detail["route"] = route
         async with self._session_factory() as session:
             session.add(
                 Message(
@@ -246,7 +253,7 @@ class SqlAnswerer:
                     latency_ms=latency_ms,
                     prompt_version=version,
                     model_version=model,
-                    detail={"sql": asdict(sql_detail)},
+                    detail=detail,
                 )
             )
             await record_cost(

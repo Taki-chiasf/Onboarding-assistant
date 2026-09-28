@@ -58,6 +58,7 @@ class RagAnswerer:
         conversation_id: uuid.UUID | None = None,
         *,
         source_types: Sequence[str] | None = None,
+        route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         trace_id = uuid.uuid4().hex
         started = perf_counter()
@@ -122,6 +123,7 @@ class RagAnswerer:
                 tokens_out,
                 cost,
                 sources,
+                route,
             )
 
             span.set_attribute("answer.cited_sources", len(chunks))
@@ -178,8 +180,12 @@ class RagAnswerer:
         tokens_out: int,
         cost: Decimal,
         sources: list[Source],
+        route: dict[str, Any] | None = None,
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
+        detail: dict[str, Any] = {"sources": [asdict(source) for source in sources]}
+        if route is not None:
+            detail["route"] = route
         async with self._session_factory() as session:
             session.add(
                 Message(
@@ -192,7 +198,7 @@ class RagAnswerer:
                     latency_ms=latency_ms,
                     prompt_version=version,
                     model_version=model,
-                    detail={"sources": [asdict(source) for source in sources]},
+                    detail=detail,
                 )
             )
             if tokens_in or tokens_out:

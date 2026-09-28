@@ -52,6 +52,7 @@ class _FakeRouter:
 class _FakeRag:
     def __init__(self) -> None:
         self.source_types: Sequence[str] | None = None
+        self.route: dict[str, Any] | None = None
         self.calls = 0
 
     async def stream(
@@ -61,9 +62,11 @@ class _FakeRag:
         conversation_id: object = None,
         *,
         source_types: Sequence[str] | None = None,
+        route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         self.calls += 1
         self.source_types = source_types
+        self.route = route
         yield {"event": "sources", "data": {"conversation_id": "c1", "sources": []}}
         yield {"event": "token", "data": {"text": "doc answer"}}
         yield {"event": "done", "data": {"answer": "doc answer"}}
@@ -72,11 +75,18 @@ class _FakeRag:
 class _FakeSql:
     def __init__(self) -> None:
         self.calls = 0
+        self.route: dict[str, Any] | None = None
 
     async def stream(
-        self, query: str, principal: Principal, conversation_id: object = None
+        self,
+        query: str,
+        principal: Principal,
+        conversation_id: object = None,
+        *,
+        route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         self.calls += 1
+        self.route = route
         yield {"event": "sql", "data": {"sql": "SELECT 1"}}
         yield {"event": "done", "data": {"answer": "sql answer"}}
 
@@ -126,6 +136,12 @@ async def test_dispatches_rag_docs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert rag.calls == 1
     assert rag.source_types is None
+    assert rag.route == {
+        "intent": "rag-docs",
+        "route_source": "router",
+        "router_confidence": 0.9,
+        "router_prompt_version": "router.v1",
+    }
     assert sql.calls == 0
     assert events[-1]["data"]["intent"] == "rag-docs"
 
@@ -152,6 +168,8 @@ async def test_dispatches_text_to_sql(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert sql.calls == 1
     assert rag.calls == 0
+    assert sql.route is not None
+    assert sql.route["intent"] == "text-to-sql"
     assert events[0]["event"] == "sql"
 
 
@@ -170,6 +188,15 @@ async def test_out_of_scope_refuses_without_model_call(monkeypatch: pytest.Monke
     roles = [obj.role for obj in added if hasattr(obj, "role")]
     assert roles.count("user") == 1
     assert roles.count("assistant") == 1
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"][0]
+    assert assistant.detail == {
+        "route": {
+            "intent": "out-of-scope",
+            "route_source": "router",
+            "router_confidence": 0.9,
+            "router_prompt_version": "router.v1",
+        }
+    }
 
 
 async def test_ambiguous_emits_clarify(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,6 +220,9 @@ async def test_ambiguous_emits_clarify(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sql.calls == 0
     assert events[0]["data"]["options"][0]["surface"] == "rag-docs"
     assert events[-1]["data"]["clarify"]["question"] == "Docs or live data?"
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"][0]
+    assert assistant.detail is not None
+    assert assistant.detail["route"]["intent"] == "ambiguous"
 
 
 async def test_pinned_surface_skips_router(monkeypatch: pytest.MonkeyPatch) -> None:

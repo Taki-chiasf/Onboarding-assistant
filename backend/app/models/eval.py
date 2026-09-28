@@ -22,6 +22,15 @@ class EvalCase(Base):
     tags: Mapped[list[str] | None] = mapped_column(JSONB)
     reviewed_by: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Provenance of a candidate case: which signal filed it and which answer
+    # message it came from, so the review queue can show the full trace.
+    source: Mapped[str | None] = mapped_column(String(16))
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class EvalRun(Base):

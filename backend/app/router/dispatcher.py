@@ -116,7 +116,9 @@ class ChatDispatcher:
                     yield event
                 return
 
-            async for event in self._route(decision, query, principal, conversation_id):
+            async for event in self._route(
+                decision, query, principal, conversation_id, self._route_metadata(decision)
+            ):
                 if event["event"] == "done" and isinstance(event["data"], dict):
                     event["data"].update(self._route_metadata(decision))
                 yield event
@@ -127,14 +129,19 @@ class ChatDispatcher:
         query: str,
         principal: Principal,
         conversation_id: uuid.UUID | None,
+        route: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
         if decision.intent == Intent.TEXT_TO_SQL:
-            return self._sql.stream(query, principal, conversation_id)
+            return self._sql.stream(query, principal, conversation_id, route=route)
         if decision.intent == Intent.RAG_CODE:
             return self._rag.stream(
-                query, principal, conversation_id, source_types=RAG_CODE_SOURCE_TYPES
+                query,
+                principal,
+                conversation_id,
+                source_types=RAG_CODE_SOURCE_TYPES,
+                route=route,
             )
-        return self._rag.stream(query, principal, conversation_id)
+        return self._rag.stream(query, principal, conversation_id, route=route)
 
     def _route_metadata(self, decision: RouteDecision) -> dict[str, Any]:
         return {
@@ -154,7 +161,9 @@ class ChatDispatcher:
         started: float,
     ) -> AsyncIterator[dict[str, Any]]:
         conv_id = await self._record_user_message(query, principal, trace_id, conversation_id)
-        message_id = await self._record_answer(conv_id, REFUSAL)
+        message_id = await self._record_answer(
+            conv_id, REFUSAL, detail={"route": self._route_metadata(decision)}
+        )
         yield {"event": "token", "data": {"text": REFUSAL}}
         done = {
             "conversation_id": str(conv_id),
@@ -181,7 +190,9 @@ class ChatDispatcher:
                 kind="surface", question="Which surface do you mean?", options=[]
             )
         conv_id = await self._record_user_message(query, principal, trace_id, conversation_id)
-        message_id = await self._record_answer(conv_id, prompt.question)
+        message_id = await self._record_answer(
+            conv_id, prompt.question, detail={"route": self._route_metadata(decision)}
+        )
         clarify = {
             "conversation_id": str(conv_id),
             "kind": prompt.kind,
@@ -227,7 +238,12 @@ class ChatDispatcher:
             await session.commit()
         return conv_id
 
-    async def _record_answer(self, conversation_id: uuid.UUID, answer: str) -> uuid.UUID:
+    async def _record_answer(
+        self,
+        conversation_id: uuid.UUID,
+        answer: str,
+        detail: dict[str, Any] | None = None,
+    ) -> uuid.UUID:
         message_id = uuid.uuid4()
         async with self._session_factory() as session:
             session.add(
@@ -236,6 +252,7 @@ class ChatDispatcher:
                     conversation_id=conversation_id,
                     role="assistant",
                     content=answer,
+                    detail=detail,
                 )
             )
             await session.commit()

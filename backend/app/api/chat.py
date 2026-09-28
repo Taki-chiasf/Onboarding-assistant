@@ -22,7 +22,7 @@ from app.core.budget import BudgetDecision, daily_usage, evaluate, record_runawa
 from app.core.config import get_settings
 from app.llm.client import get_provider, get_router_provider
 from app.llm.models import ModelConfig, load_models
-from app.models import Conversation, Message
+from app.models import Conversation, Feedback, Message
 from app.rag.answer import RagAnswerer
 from app.rag.retrieval import Retriever
 from app.router.dispatcher import ChatDispatcher
@@ -181,6 +181,22 @@ async def get_messages(
             .order_by(Message.created_at.asc())
         )
         rows = result.scalars().all()
+        feedback_by_message: dict[uuid.UUID, Feedback] = {}
+        if rows:
+            feedback_rows = (
+                (
+                    await session.execute(
+                        select(Feedback).where(
+                            Feedback.message_id.in_([row.id for row in rows]),
+                            Feedback.source == "real",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for feedback in feedback_rows:
+                feedback_by_message.setdefault(feedback.message_id, feedback)
     return [
         {
             "id": str(row.id),
@@ -188,6 +204,14 @@ async def get_messages(
             "content": row.content,
             "trace_id": row.trace_id,
             "detail": row.detail,
+            "feedback": (
+                {
+                    "rating": feedback_by_message[row.id].rating,
+                    "correction": feedback_by_message[row.id].correction,
+                }
+                if row.id in feedback_by_message
+                else None
+            ),
             "cost_usd": str(row.cost_usd) if row.cost_usd is not None else None,
             "model_version": row.model_version,
             "prompt_version": row.prompt_version,

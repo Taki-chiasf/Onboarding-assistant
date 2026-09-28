@@ -157,10 +157,12 @@ export function Chat({ principal }: { principal: Principal }) {
     const res = await fetch(`/api/conversations/${id}/messages`);
     if (!res.ok) return;
     const history = (await res.json()) as {
+      id: string;
       role: "user" | "assistant";
       content: string;
       trace_id?: string | null;
       detail?: { sources?: Source[]; sql?: SqlDetail } | null;
+      feedback?: { rating?: string | null; correction?: string | null } | null;
     }[];
     setMessages(
       history.map((m) => ({
@@ -169,6 +171,13 @@ export function Chat({ principal }: { principal: Principal }) {
         sources: m.detail?.sources,
         sql: m.detail?.sql,
         traceId: m.trace_id ?? undefined,
+        uid: m.id,
+        messageId: m.id,
+        feedback:
+          m.feedback?.rating === "up" || m.feedback?.rating === "down"
+            ? m.feedback.rating
+            : undefined,
+        correction: m.feedback?.correction ?? undefined,
       }))
     );
   }
@@ -182,6 +191,46 @@ export function Chat({ principal }: { principal: Principal }) {
 
   function applyAssistant(update: (prev: ChatMessage) => ChatMessage) {
     setDraft((prev) => (prev ? update(prev) : prev));
+  }
+
+  function updateMessage(messageId: string, patch: Partial<ChatMessage>) {
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.messageId === messageId ? { ...message, ...patch } : message
+      )
+    );
+    setDraft((prev) =>
+      prev && prev.messageId === messageId ? { ...prev, ...patch } : prev
+    );
+  }
+
+  async function submitFeedback(
+    messageId: string,
+    rating: "up" | "down",
+    correction?: string
+  ) {
+    const current =
+      messages.find((message) => message.messageId === messageId) ??
+      (draft?.messageId === messageId ? draft : undefined);
+    const previousRating = current?.feedback;
+    const previousCorrection = current?.correction;
+    updateMessage(messageId, {
+      feedback: rating,
+      correction: correction ?? previousCorrection,
+    });
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message_id: messageId, rating, correction }),
+      });
+      if (!res.ok) throw new Error("feedback request failed");
+    } catch {
+      updateMessage(messageId, {
+        feedback: previousRating,
+        correction: previousCorrection,
+      });
+    }
   }
 
   async function send(pinned?: { query: string; surface?: Surface }) {
@@ -235,6 +284,10 @@ export function Chat({ principal }: { principal: Principal }) {
             model: String(data.model ?? ""),
             promptVersion: String(data.prompt_version ?? ""),
             traceId: String(data.trace_id ?? ""),
+            messageId:
+              typeof data.message_id === "string" && data.message_id
+                ? data.message_id
+                : m.messageId,
           }));
         }
       });
@@ -361,6 +414,9 @@ export function Chat({ principal }: { principal: Principal }) {
                           messages={visible}
                           busy={busy}
                           onClarify={(query, surface) => void send({ query, surface })}
+                          onFeedback={(messageId, rating, correction) =>
+                            void submitFeedback(messageId, rating, correction)
+                          }
                         />
                       </motion.div>
                     )}

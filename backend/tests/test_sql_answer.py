@@ -136,6 +136,24 @@ async def test_stream_empty_rows_uses_deterministic_copy(monkeypatch: pytest.Mon
     assert events[-1]["data"]["answer"] == NO_MATCHING_RECORDS
 
 
+async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    provider = FakeProvider(
+        responses={"fake-builder": "SELECT id FROM org_members", "fake-grounding": "ok"}
+    )
+    result = SqlResult(columns=["id"], rows=[(1,)], truncated=False, latency_ms=1)
+    answerer = _answerer(provider, result)
+    route = {"intent": "text-to-sql", "route_source": "router", "router_confidence": 0.95}
+
+    _ = [e async for e in answerer.stream("q", _principal(), route=route)]
+
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert assistant[0].detail is not None
+    assert assistant[0].detail["route"] == route
+    assert assistant[0].detail["sql"]["sql"] == "SELECT id FROM org_members"
+
+
 async def test_stream_records_cost_for_builder_and_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

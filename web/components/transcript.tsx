@@ -1,9 +1,10 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { PixelCursor } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,11 @@ export type ChatMessage = {
   model?: string;
   promptVersion?: string;
   traceId?: string;
+  /* Server-side message id, the target for feedback. */
+  messageId?: string;
+  /* The caller's saved rating, rehydrated on reload. */
+  feedback?: "up" | "down";
+  correction?: string;
   /* Client-side identity, stable from streaming draft through the
      finalized turn, so a completed answer never re-runs its entrance. */
   uid?: string;
@@ -178,14 +184,109 @@ export function SourcePanel({
   );
 }
 
+export function AnswerFeedback({
+  messageId,
+  rating,
+  correction,
+  onFeedback,
+}: {
+  messageId: string;
+  rating?: "up" | "down";
+  correction?: string;
+  onFeedback: (messageId: string, rating: "up" | "down", correction?: string) => void;
+}) {
+  const [draft, setDraft] = useState(correction ?? "");
+  const [sent, setSent] = useState(false);
+  const down = rating === "down";
+
+  useEffect(() => {
+    setDraft(correction ?? "");
+  }, [correction]);
+
+  return (
+    <div className="mt-2 flex items-center gap-1">
+      <button
+        type="button"
+        aria-label="Helpful"
+        aria-pressed={rating === "up"}
+        onClick={() => onFeedback(messageId, "up")}
+        className={cn(
+          "rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+          rating === "up" && "bg-secondary text-foreground"
+        )}
+      >
+        <ThumbsUp className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Not helpful"
+        aria-pressed={down}
+        onClick={() => onFeedback(messageId, "down")}
+        className={cn(
+          "rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
+          down && "bg-secondary text-foreground"
+        )}
+      >
+        <ThumbsDown className="h-3.5 w-3.5" />
+      </button>
+      <AnimatePresence initial={false}>
+        {down && (
+          <motion.form
+            initial={{ opacity: 0, x: -4 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -4 }}
+            transition={{ duration: 0.15, ease: EASE }}
+            className="flex min-w-0 max-w-md flex-1 items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const text = draft.trim();
+              if (!text) return;
+              onFeedback(messageId, "down", text);
+              setSent(true);
+            }}
+          >
+            <input
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setSent(false);
+              }}
+              placeholder="What was missing or wrong?"
+              className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs outline-none transition-colors focus:border-foreground/40"
+            />
+            <button
+              type="submit"
+              disabled={!draft.trim()}
+              className="shrink-0 rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              Send
+            </button>
+            {sent && (
+              <motion.span
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="shrink-0 text-xs text-muted-foreground"
+              >
+                Noted for review
+              </motion.span>
+            )}
+          </motion.form>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function Transcript({
   messages,
   busy,
   onClarify,
+  onFeedback,
 }: {
   messages: ChatMessage[];
   busy: boolean;
   onClarify: (query: string, surface: Surface) => void;
+  onFeedback: (messageId: string, rating: "up" | "down", correction?: string) => void;
 }) {
   return (
     <div className="space-y-6">
@@ -246,6 +347,14 @@ export function Transcript({
                 sources={message.sources ?? []}
                 sql={message.sql}
                 traceId={message.traceId}
+              />
+            )}
+            {message.messageId && (
+              <AnswerFeedback
+                messageId={message.messageId}
+                rating={message.feedback}
+                correction={message.correction}
+                onFeedback={onFeedback}
               />
             )}
           </motion.div>
