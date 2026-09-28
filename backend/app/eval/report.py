@@ -24,6 +24,20 @@ from app.text_to_sql.answer import NO_MATCHING_RECORDS
 
 DONT_KNOW_ANSWERS = frozenset({CITE_OR_DIE, NO_MATCHING_RECORDS})
 
+# The deterministic fallback copy carries no trailing period, but a model
+# phrasing the fallback itself usually adds one. Detection normalizes case and
+# trailing punctuation so a real "I don't know." counts as a fallback instead
+# of hiding from the metric and the console.
+FALLBACK_TEXTS = ("i don't know", "i do not know", "no matching records")
+
+
+def normalized_answer(answer: str) -> str:
+    return answer.strip().lower().rstrip(".!? ")
+
+
+def is_dont_know(answer: str) -> bool:
+    return normalized_answer(answer) in FALLBACK_TEXTS
+
 
 def router_metrics(summary: RouterEvalSummary) -> dict[str, float]:
     out_of_scope = [r for r in summary.results if r.expected == Intent.OUT_OF_SCOPE.value]
@@ -81,7 +95,7 @@ def judge_metric(verdicts: Sequence[bool]) -> dict[str, float]:
 def dont_know_metric(answers: Sequence[str]) -> dict[str, float]:
     if not answers:
         return {}
-    fallbacks = sum(1 for answer in answers if answer.strip() in DONT_KNOW_ANSWERS)
+    fallbacks = sum(1 for answer in answers if is_dont_know(answer))
     return {"dont_know_rate": fallbacks / len(answers)}
 
 

@@ -374,7 +374,7 @@ export function Chat({ principal }: { principal: Principal }) {
                 className="mb-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
                 <Gauge className="h-4 w-4" />
-                Cost dashboard
+                Admin console
               </Link>
             )}
             <div className="flex items-center justify-between gap-3">

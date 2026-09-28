@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # Incoming-webhook URL for the nightly eval alert. Empty disables posting.
     slack_eval_webhook_url: str = ""
 
+    # Base URL of the trace backend (Tempo HTTP API) for the admin span viewer.
+    tempo_url: str = ""
+
     sql_readonly_role: str = "app_readonly"
     sql_statement_timeout_ms: int = 5000
     sql_max_rows: int = 100

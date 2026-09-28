@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { CostDashboard } from "@/components/cost-dashboard";
+import { AdminConsole } from "@/components/admin/admin-console";
 import { getPrincipal } from "@/lib/auth";
 
 export default async function AdminPage() {
@@ -11,5 +11,5 @@ export default async function AdminPage() {
   if (principal.role !== "admin") {
     redirect("/");
   }
-  return <CostDashboard principal={principal} />;
+  return <AdminConsole principal={principal} />;
 }

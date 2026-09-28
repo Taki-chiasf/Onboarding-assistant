@@ -21,6 +21,7 @@ from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.principal import Principal
+from app.core.otel import current_trace_id
 from app.core.redact import redact_pii
 from app.llm.models import ModelConfig
 from app.llm.pricing import compute_cost, estimate_tokens
@@ -94,13 +95,13 @@ class SqlAnswerer:
         *,
         route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        trace_id = uuid.uuid4().hex
         started = perf_counter()
         logger.info(
             "sql query from %s: %s", principal.email, redact_pii(query, allow=[principal.email])
         )
 
         with tracer.start_as_current_span("sql_answer") as span:
+            trace_id = current_trace_id() or uuid.uuid4().hex
             span.set_attribute("user.dept", principal.dept)
             span.set_attribute("user.role", principal.role)
 

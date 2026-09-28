@@ -3,6 +3,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 from app.auth.principal import Principal
 from app.llm.models import ModelConfig
@@ -154,6 +155,23 @@ async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.Monkey
             }
         ]
     }
+
+
+async def test_stream_stores_the_active_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A turn's stored trace id is the OTel trace id, so the console can
+    resolve it against the trace backend."""
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    answerer, _ = _answerer(_FakeProvider(["ok"]), [_chunk()])
+
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("turn") as span:
+        expected = f"{span.get_span_context().trace_id:032x}"
+        _ = [e async for e in answerer.stream("hello", _principal())]
+
+    for obj in added:
+        if hasattr(obj, "role"):
+            assert obj.trace_id == expected
 
 
 async def test_stream_passes_source_type_restriction(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,4 +16,6 @@ storage:
 
 compactor:
   compaction:
-    block_retention: 1h
+    # Keep a day of traces so the console's span viewer can resolve recent
+    # turns without growing the local blocks directory unbounded.
+    block_retention: 24h

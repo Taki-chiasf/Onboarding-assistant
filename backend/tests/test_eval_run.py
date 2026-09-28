@@ -106,6 +106,13 @@ def test_collect_metrics_judge_and_dont_know() -> None:
     assert metrics["dont_know_rate"] == 0.0
 
 
+def test_dont_know_metric_counts_the_phrased_fallback() -> None:
+    from app.eval.report import dont_know_metric
+
+    metrics = dont_know_metric(["I don't know.", "no matching records.", "16 weeks"])
+    assert metrics["dont_know_rate"] == 2 / 3
+
+
 def test_collect_sections() -> None:
     sources = MetricSources(
         router=_router_summary(), sql=_sql_summary(), security=_security_summary()

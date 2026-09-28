@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.principal import Principal
 from app.core.moderation import record_screen, screen
+from app.core.otel import current_trace_id
 from app.llm.provider import ChatProvider
 from app.models import Conversation, Message
 from app.rag.answer import RagAnswerer
@@ -84,10 +85,10 @@ class ChatDispatcher:
         *,
         surface: Surface | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        trace_id = uuid.uuid4().hex
         started = perf_counter()
 
         with tracer.start_as_current_span("dispatch") as span:
+            trace_id = current_trace_id() or uuid.uuid4().hex
             span.set_attribute("user.dept", principal.dept)
             span.set_attribute("user.role", principal.role)
 

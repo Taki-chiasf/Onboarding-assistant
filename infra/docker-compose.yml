@@ -68,6 +68,7 @@ services:
       DAILY_COST_ALERT_USD: ${DAILY_COST_ALERT_USD:-1.0}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      TEMPO_URL: ${TEMPO_URL:-http://tempo:3200}
     ports:
       - "8000:8000"
     depends_on:
