@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Retention window for query audit logs and eval-run records.
     retention_days: int = 90
 
+    # Key-encryption key for conversation history at rest (base64, 32 bytes).
+    # Empty stores history as plaintext, which is fine for local development;
+    # the demo deployment sets it. Generate one with:
+    #   python -c "from app.core.crypto import generate_key; print(generate_key())"
+    encryption_key: str = ""
+
     # Incoming-webhook URL for the nightly eval alert. Empty disables posting.
     slack_eval_webhook_url: str = ""
 

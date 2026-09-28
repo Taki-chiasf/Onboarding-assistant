@@ -25,6 +25,9 @@ class _Result:
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
 
+    def first(self) -> Any:
+        return self._rows[0] if self._rows else None
+
     def scalars(self) -> "_Result":
         return self
 
@@ -133,7 +136,7 @@ async def test_thumbs_down_files_a_candidate_eval_case(app: FastAPI, client: Asy
             _Result([message]),  # the answered message
             _Result([]),  # replace existing feedback
             _Result([]),  # no candidate yet
-            _Result(["How much parental leave do I get?"]),  # the user prompt
+            _Result([(uuid.uuid4(), "How much parental leave do I get?", None)]),  # the user prompt
         ]
     )
     _use_session(app, session)
@@ -169,7 +172,7 @@ async def test_feedback_redacts_the_correction_text(app: FastAPI, client: AsyncC
             _Result([message]),
             _Result([]),
             _Result([]),
-            _Result(["How do I reach the vendor?"]),
+            _Result([(uuid.uuid4(), "How do I reach the vendor?", None)]),
         ]
     )
     _use_session(app, session)
@@ -206,7 +209,7 @@ async def test_thumbs_up_withdraws_the_candidate(app: FastAPI, client: AsyncClie
             _Result([message]),
             _Result([]),
             _Result([candidate]),
-            _Result(["How much leave?"]),
+            _Result([(uuid.uuid4(), "How much leave?", None)]),
         ]
     )
     _use_session(app, session)
@@ -230,7 +233,7 @@ async def test_plain_thumbs_up_files_nothing(app: FastAPI, client: AsyncClient) 
             _Result([message]),
             _Result([]),
             _Result([]),
-            _Result(["How much leave?"]),
+            _Result([(uuid.uuid4(), "How much leave?", None)]),
         ]
     )
     _use_session(app, session)

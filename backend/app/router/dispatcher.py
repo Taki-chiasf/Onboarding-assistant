@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from app.auth.principal import Principal
 from app.core.moderation import record_screen, screen
 from app.core.otel import current_trace_id
+from app.history import record_user_message, seal_message
 from app.llm.provider import ChatProvider
-from app.models import Conversation, Message
+from app.models import Message
 from app.rag.answer import RagAnswerer
 from app.router.router import IntentRouter
 from app.router.schema import (
@@ -225,21 +226,14 @@ class ChatDispatcher:
         trace_id: str,
         conversation_id: uuid.UUID | None,
     ) -> uuid.UUID:
-        conv_id = conversation_id or uuid.uuid4()
         async with self._session_factory() as session:
-            if conversation_id is None:
-                session.add(Conversation(id=conv_id, user_id=principal.sub, title=query[:255]))
-            session.add(
-                Message(
-                    id=uuid.uuid4(),
-                    conversation_id=conv_id,
-                    role="user",
-                    content=query,
-                    trace_id=trace_id,
-                )
+            return await record_user_message(
+                session,
+                user_id=principal.sub,
+                query=query,
+                trace_id=trace_id,
+                conversation_id=conversation_id,
             )
-            await session.commit()
-        return conv_id
 
     async def _record_answer(
         self,
@@ -249,12 +243,15 @@ class ChatDispatcher:
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
         async with self._session_factory() as session:
+            stored = await seal_message(
+                session, conversation_id=conversation_id, message_id=message_id, text=answer
+            )
             session.add(
                 Message(
                     id=message_id,
                     conversation_id=conversation_id,
                     role="assistant",
-                    content=answer,
+                    content=stored,
                     detail=detail,
                 )
             )

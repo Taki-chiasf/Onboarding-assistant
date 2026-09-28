@@ -16,6 +16,10 @@ class Conversation(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str] = mapped_column(String(255))
     title: Mapped[str | None] = mapped_column(String(255))
+    # The conversation's data key, sealed with the key-encryption key. Null for
+    # history written before encryption was configured; the backfill CLI wraps
+    # those rows on demand.
+    key_wrapped: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

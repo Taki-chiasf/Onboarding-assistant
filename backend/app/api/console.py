@@ -21,9 +21,11 @@ from pydantic import BaseModel
 from sqlalchemy import Float, cast, func, or_, select
 
 from app.api.admin import AdminDep, SessionFactoryDep
+from app.core.crypto import Cipher, get_cipher
 from app.core.deps import SettingsDep
+from app.core.fallback import is_dont_know
 from app.eval.gates import GATES
-from app.eval.report import FALLBACK_TEXTS, is_dont_know
+from app.history import message_context, open_wrapped_key, read_text
 from app.models import Conversation, DocChunk, Feedback, IngestJob, Message, NightlyEvalRun
 from app.router.guardrails import LOW_CONFIDENCE
 
@@ -203,22 +205,21 @@ async def attention_list(
     _admin: AdminDep, factory: SessionFactoryDep, limit: int = 20
 ) -> AttentionList:
     bounded = max(1, min(limit, MAX_ROWS))
-    # The stored answer may be the deterministic fallback copy or the model's
-    # own phrasing of it, so punctuation and case are normalized before the
-    # exact comparison.
-    normalized = func.regexp_replace(
-        func.btrim(func.lower(Message.content)), r"[.!?[:space:]]+$", ""
-    )
+    # The answer body is encrypted at rest, so fallback detection relies on the
+    # flag the answer paths write at turn time; the router confidence stays in
+    # the plaintext detail metadata.
+    fallback = Message.detail["fallback"].astext == "true"
     confidence = cast(Message.detail["route"]["router_confidence"].astext, Float)
+    cipher = get_cipher()
     async with factory() as session:
         flagged = (
             await session.execute(
-                select(Message, Conversation.user_id)
+                select(Message, Conversation.user_id, Conversation.key_wrapped)
                 .join(Conversation, Conversation.id == Message.conversation_id)
                 .where(
                     Message.role == "assistant",
                     or_(
-                        normalized.in_(FALLBACK_TEXTS),
+                        fallback,
                         confidence < LOW_CONFIDENCE,
                     ),
                 )
@@ -226,12 +227,25 @@ async def attention_list(
                 .limit(bounded)
             )
         ).all()
+        keys: dict[uuid.UUID, Cipher | None] = {}
+        for message, _user_id, wrapped in flagged:
+            keys.setdefault(
+                message.conversation_id,
+                open_wrapped_key(cipher, wrapped, conversation_id=message.conversation_id),
+            )
         questions: dict[uuid.UUID, list[tuple[datetime, str]]] = {}
-        conversation_ids = {message.conversation_id for message, _ in flagged}
+        conversation_ids = {message.conversation_id for message, _, _ in flagged}
         if conversation_ids:
             user_rows = (
                 await session.execute(
-                    select(Message.conversation_id, Message.content, Message.created_at)
+                    select(
+                        Message.id,
+                        Message.conversation_id,
+                        Message.content,
+                        Message.created_at,
+                        Conversation.key_wrapped,
+                    )
+                    .join(Conversation, Conversation.id == Message.conversation_id)
                     .where(
                         Message.conversation_id.in_(conversation_ids),
                         Message.role == "user",
@@ -239,19 +253,31 @@ async def attention_list(
                     .order_by(Message.created_at.asc())
                 )
             ).all()
-            for conversation_id, content, created_at in user_rows:
-                questions.setdefault(conversation_id, []).append((created_at, content))
+            for message_id, conversation_id, content, created_at, wrapped in user_rows:
+                keys.setdefault(
+                    conversation_id,
+                    open_wrapped_key(cipher, wrapped, conversation_id=conversation_id),
+                )
+                question = read_text(
+                    keys[conversation_id], content, context=message_context(message_id)
+                )
+                questions.setdefault(conversation_id, []).append((created_at, question))
 
     items: list[AttentionItem] = []
-    for message, user_id in flagged:
+    for message, user_id, _wrapped in flagged:
         route = (message.detail or {}).get("route") or {}
         route_confidence = route.get("router_confidence")
+        answer = read_text(
+            keys[message.conversation_id],
+            message.content,
+            context=message_context(message.id),
+        )
         items.append(
             AttentionItem(
                 message_id=str(message.id),
                 question=previous_question(questions, message.conversation_id, message.created_at),
-                answer=message.content,
-                reasons=attention_reasons(message.content, route_confidence),
+                answer=answer,
+                reasons=attention_reasons(answer, route_confidence),
                 intent=route.get("intent"),
                 confidence=route_confidence,
                 trace_id=message.trace_id,

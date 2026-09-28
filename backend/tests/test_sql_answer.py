@@ -135,6 +135,17 @@ async def test_stream_empty_rows_uses_deterministic_copy(monkeypatch: pytest.Mon
     assert events[1]["data"]["text"] == NO_MATCHING_RECORDS
     assert events[-1]["data"]["answer"] == NO_MATCHING_RECORDS
 
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert assistant[0].detail == {
+        "sql": {
+            "sql": "SELECT id FROM org_members",
+            "row_count": 0,
+            "truncated": False,
+            "latency_ms": 3,
+        },
+        "fallback": True,
+    }
+
 
 async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     added: list[Any] = []

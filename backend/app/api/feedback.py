@@ -20,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
+from app.core.crypto import get_cipher
 from app.core.redact import redact_pii
+from app.history import message_context, open_wrapped_key, read_text
 from app.models import Conversation, EvalCase, Feedback, Message
 
 router = APIRouter(prefix="/api", tags=["feedback"])
@@ -57,17 +59,25 @@ SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sess
 async def _user_prompt(
     session: AsyncSession, conversation_id: uuid.UUID, asked_at: datetime
 ) -> str | None:
-    result = await session.execute(
-        select(Message.content)
-        .where(
-            Message.conversation_id == conversation_id,
-            Message.role == "user",
-            Message.created_at <= asked_at,
+    row = (
+        await session.execute(
+            select(Message.id, Message.content, Conversation.key_wrapped)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.role == "user",
+                Message.created_at <= asked_at,
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
         )
-        .order_by(Message.created_at.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
+    ).first()
+    if row is None:
+        return None
+    message_id, content, wrapped = row
+    cipher = get_cipher()
+    key = open_wrapped_key(cipher, wrapped, conversation_id=conversation_id)
+    return read_text(key, content, context=message_context(message_id))
 
 
 @router.post("/feedback", response_model=FeedbackAck)

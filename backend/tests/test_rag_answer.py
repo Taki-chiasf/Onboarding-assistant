@@ -130,6 +130,9 @@ async def test_stream_cite_or_die_without_chunks(monkeypatch: pytest.MonkeyPatch
     assert done["tokens_in"] == 0
     assert provider.stream_calls == 0
 
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert assistant[0].detail == {"sources": [], "fallback": True}
+
 
 async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     added: list[Any] = []

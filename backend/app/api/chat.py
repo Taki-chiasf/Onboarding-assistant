@@ -14,12 +14,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
 from app.core.budget import BudgetDecision, daily_usage, evaluate, record_runaway
 from app.core.config import get_settings
+from app.core.crypto import get_cipher
+from app.history import (
+    delete_conversations,
+    message_context,
+    open_conversation_key,
+    read_text,
+    title_context,
+)
 from app.llm.client import get_provider, get_router_provider
 from app.llm.models import ModelConfig, load_models
 from app.models import Conversation, Feedback, Message
@@ -40,6 +48,13 @@ class ChatRequest(BaseModel):
     query: str
     conversation_id: uuid.UUID | None = None
     surface: Surface | None = None
+
+
+class DeletionAck(BaseModel):
+    conversations: int
+    messages: int
+    feedback: int
+    pending_cases: int
 
 
 def _router_model(models: ModelConfig) -> str:
@@ -140,9 +155,14 @@ async def chat(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(request.app.state.engine, expire_on_commit=False)
+
+
 @router.get("/conversations")
 async def list_conversations(request: Request, principal: PrincipalDep) -> list[dict[str, object]]:
-    factory = async_sessionmaker(request.app.state.engine, expire_on_commit=False)
+    cipher = get_cipher()
+    factory = _session_factory(request)
     async with factory() as session:
         result = await session.execute(
             select(Conversation)
@@ -150,31 +170,42 @@ async def list_conversations(request: Request, principal: PrincipalDep) -> list[
             .order_by(Conversation.created_at.desc())
         )
         rows = result.scalars().all()
-    return [
-        {
-            "id": str(row.id),
-            "title": row.title,
-            "created_at": row.created_at.isoformat(),
-        }
-        for row in rows
-    ]
+        conversations: list[dict[str, object]] = []
+        for row in rows:
+            key = open_conversation_key(cipher, row)
+            conversations.append(
+                {
+                    "id": str(row.id),
+                    "title": (
+                        read_text(key, row.title, context=title_context(row.id))
+                        if row.title is not None
+                        else None
+                    ),
+                    "created_at": row.created_at.isoformat(),
+                }
+            )
+    return conversations
 
 
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(
     conversation_id: uuid.UUID, request: Request, principal: PrincipalDep
 ) -> list[dict[str, object]]:
-    factory = async_sessionmaker(request.app.state.engine, expire_on_commit=False)
+    cipher = get_cipher()
+    factory = _session_factory(request)
     async with factory() as session:
-        owned = await session.execute(
-            select(Conversation.id).where(
-                Conversation.id == conversation_id,
-                Conversation.user_id == principal.sub,
+        conversation = (
+            await session.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == principal.sub,
+                )
             )
-        )
-        if owned.scalar_one_or_none() is None:
+        ).scalar_one_or_none()
+        if conversation is None:
             # Do not distinguish "not yours" from "does not exist".
             raise HTTPException(status_code=404, detail="conversation not found")
+        key = open_conversation_key(cipher, conversation)
         result = await session.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
@@ -202,7 +233,7 @@ async def get_messages(
         {
             "id": str(row.id),
             "role": row.role,
-            "content": row.content,
+            "content": read_text(key, row.content, context=message_context(row.id)),
             "trace_id": row.trace_id,
             "detail": row.detail,
             "feedback": (
@@ -219,3 +250,35 @@ async def get_messages(
         }
         for row in rows
     ]
+
+
+@router.delete("/conversations/{conversation_id}", response_model=DeletionAck)
+async def delete_conversation(
+    conversation_id: uuid.UUID, request: Request, principal: PrincipalDep
+) -> DeletionAck:
+    factory = _session_factory(request)
+    async with factory() as session:
+        result = await delete_conversations(
+            session, user_id=principal.sub, conversation_id=conversation_id
+        )
+    if result.conversations == 0:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return DeletionAck(
+        conversations=result.conversations,
+        messages=result.messages,
+        feedback=result.feedback,
+        pending_cases=result.pending_cases,
+    )
+
+
+@router.delete("/conversations", response_model=DeletionAck)
+async def delete_history(request: Request, principal: PrincipalDep) -> DeletionAck:
+    factory = _session_factory(request)
+    async with factory() as session:
+        result = await delete_conversations(session, user_id=principal.sub)
+    return DeletionAck(
+        conversations=result.conversations,
+        messages=result.messages,
+        feedback=result.feedback,
+        pending_cases=result.pending_cases,
+    )

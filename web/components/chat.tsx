@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, Gauge, Plus } from "lucide-react";
+import { ArrowUp, Gauge, Plus, Trash2 } from "lucide-react";
 
 import { LogoutButton } from "@/components/logout-button";
 import { PixelMark } from "@/components/pixel-mark";
@@ -125,6 +125,10 @@ export function Chat({ principal }: { principal: Principal }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
   /* View key drives the switch animation and only changes on explicit
@@ -187,6 +191,38 @@ export function Chat({ principal }: { principal: Principal }) {
     setViewKey("new");
     setMessages([]);
     setDraft(null);
+  }
+
+  async function deleteConversation(id: string) {
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("delete failed");
+      setConversations((prev) => prev.filter((item) => item.id !== id));
+      if (conversationId === id) newConversation();
+    } catch {
+      setHistoryError("Could not delete that conversation.");
+    } finally {
+      setHistoryBusy(false);
+      setConfirmingDelete(null);
+    }
+  }
+
+  async function clearHistory() {
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch("/api/conversations", { method: "DELETE" });
+      if (!res.ok) throw new Error("clear failed");
+      setConversations([]);
+      newConversation();
+    } catch {
+      setHistoryError("Could not clear your history.");
+    } finally {
+      setHistoryBusy(false);
+      setConfirmingClear(false);
+    }
   }
 
   function applyAssistant(update: (prev: ChatMessage) => ChatMessage) {
@@ -330,9 +366,49 @@ export function Chat({ principal }: { principal: Principal }) {
             </Button>
           </div>
           <nav className="flex-1 overflow-y-auto pb-3">
-            <p className="px-4 pb-1 pt-2 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Recent
-            </p>
+            <div className="flex items-center justify-between px-4 pb-1 pt-2">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+                Recent
+              </p>
+              {conversations.length > 0 && !confirmingClear && (
+                <button
+                  type="button"
+                  disabled={historyBusy}
+                  onClick={() => {
+                    setHistoryError(null);
+                    setConfirmingClear(true);
+                  }}
+                  className="text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+            {confirmingClear && (
+              <div className="mx-3 mb-2 rounded-md border bg-secondary/50 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  Delete every conversation and its history?
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={historyBusy}
+                    onClick={() => void clearHistory()}
+                    className="rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/85 disabled:opacity-50"
+                  >
+                    Delete all
+                  </button>
+                  <button
+                    type="button"
+                    disabled={historyBusy}
+                    onClick={() => setConfirmingClear(false)}
+                    className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             {conversations.length === 0 ? (
               <p className="px-4 py-2 text-xs text-muted-foreground">No conversations yet.</p>
             ) : (
@@ -345,26 +421,70 @@ export function Chat({ principal }: { principal: Principal }) {
                     animate={{ opacity: 1, x: 0 }}
                     transition={transition}
                   >
-                    <button
-                      onClick={() => openConversation(conversation.id)}
-                      className={cn(
-                        "relative block w-full truncate px-4 py-2 text-left text-sm transition-colors",
-                        conversation.id === conversationId
-                          ? "bg-secondary font-medium text-foreground"
-                          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                      )}
-                    >
-                      {conversation.id === conversationId && (
-                        <span
-                          aria-hidden
-                          className="bg-ramp-v absolute inset-y-[6px] left-0 w-px"
-                        />
-                      )}
-                      {conversation.title ?? "Untitled"}
-                    </button>
+                    {confirmingDelete === conversation.id ? (
+                      <div className="px-4 py-2">
+                        <p className="truncate text-sm text-muted-foreground">
+                          Delete this conversation?
+                        </p>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={historyBusy}
+                            onClick={() => void deleteConversation(conversation.id)}
+                            className="rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/85 disabled:opacity-50"
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            disabled={historyBusy}
+                            onClick={() => setConfirmingDelete(null)}
+                            className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="group relative flex items-center">
+                        <button
+                          onClick={() => openConversation(conversation.id)}
+                          className={cn(
+                            "relative block w-full truncate py-2 pl-4 pr-9 text-left text-sm transition-colors",
+                            conversation.id === conversationId
+                              ? "bg-secondary font-medium text-foreground"
+                              : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          )}
+                        >
+                          {conversation.id === conversationId && (
+                            <span
+                              aria-hidden
+                              className="bg-ramp-v absolute inset-y-[6px] left-0 w-px"
+                            />
+                          )}
+                          {conversation.title ?? "Untitled"}
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete conversation"
+                          aria-label={`Delete ${conversation.title ?? "conversation"}`}
+                          disabled={historyBusy}
+                          onClick={() => {
+                            setHistoryError(null);
+                            setConfirmingDelete(conversation.id);
+                          }}
+                          className="absolute right-2 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-0"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </motion.li>
                 ))}
               </ul>
+            )}
+            {historyError && (
+              <p className="px-4 py-1 text-xs text-brand-vermilion">{historyError}</p>
             )}
           </nav>
           <div className="border-t p-3">

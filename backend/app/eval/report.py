@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.fallback import is_dont_know
 from app.eval.baseline import BaselineComparison
 from app.eval.gates import GateReport, evaluate_gates, median, percentile
 from app.eval.router_eval import RouterEvalSummary
@@ -23,20 +24,6 @@ from app.router.schema import Intent
 from app.text_to_sql.answer import NO_MATCHING_RECORDS
 
 DONT_KNOW_ANSWERS = frozenset({CITE_OR_DIE, NO_MATCHING_RECORDS})
-
-# The deterministic fallback copy carries no trailing period, but a model
-# phrasing the fallback itself usually adds one. Detection normalizes case and
-# trailing punctuation so a real "I don't know." counts as a fallback instead
-# of hiding from the metric and the console.
-FALLBACK_TEXTS = ("i don't know", "i do not know", "no matching records")
-
-
-def normalized_answer(answer: str) -> str:
-    return answer.strip().lower().rstrip(".!? ")
-
-
-def is_dont_know(answer: str) -> bool:
-    return normalized_answer(answer) in FALLBACK_TEXTS
 
 
 def router_metrics(summary: RouterEvalSummary) -> dict[str, float]:

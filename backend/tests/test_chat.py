@@ -1,6 +1,7 @@
 import os
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -155,11 +156,12 @@ async def test_messages_endpoint_returns_evidence(
     detail = {"sources": [{"id": "chunk-1", "source_uri": "file:docs/a.md"}]}
     message = _StubMessage(detail)
     feedback = _StubFeedback(message.id, "down", "missing the policy citation")
+    conversation = SimpleNamespace(id=uuid.uuid4(), key_wrapped=None)
     monkeypatch.setattr(
         chat_mod,
         "async_sessionmaker",
         lambda engine, expire_on_commit=False: (
-            lambda: _StubSession([uuid.uuid4(), message, feedback])
+            lambda: _StubSession([conversation, message, feedback])
         ),
     )
 

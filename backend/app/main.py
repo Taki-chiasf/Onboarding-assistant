@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -8,9 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.api import admin, auth, chat, code, console, feedback, health, oidc, webhooks
 from app.core.config import get_settings
+from app.core.crypto import InvalidKeyError, get_cipher
 from app.core.logging import configure_logging
 from app.core.otel import init_otel
 from app.core.readiness import ReadyCheck, db_check, redis_check
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -43,6 +47,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
     init_otel(settings.app_name, settings.otel_exporter_otlp_endpoint)
+    try:
+        cipher = get_cipher()
+    except InvalidKeyError as exc:
+        raise RuntimeError(f"ENCRYPTION_KEY is invalid: {exc}") from exc
+    if cipher is None:
+        logger.warning("ENCRYPTION_KEY is not set; conversation history is stored unencrypted")
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     FastAPIInstrumentor.instrument_app(app)

@@ -21,12 +21,14 @@ from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.auth.principal import Principal
+from app.core.fallback import is_dont_know
 from app.core.otel import current_trace_id
 from app.core.redact import redact_pii
+from app.history import record_user_message, seal_message
 from app.llm.models import ModelConfig
 from app.llm.pricing import compute_cost, estimate_tokens
 from app.llm.provider import ChatMessage, ChatProvider
-from app.models import Conversation, Message
+from app.models import Message
 from app.prompts.loader import load_prompt, prompt_version
 from app.rag.cost import record_cost
 from app.text_to_sql.builder import SqlBuilder
@@ -203,21 +205,14 @@ class SqlAnswerer:
         trace_id: str,
         conversation_id: uuid.UUID | None,
     ) -> uuid.UUID:
-        conv_id = conversation_id or uuid.uuid4()
         async with self._session_factory() as session:
-            if conversation_id is None:
-                session.add(Conversation(id=conv_id, user_id=principal.sub, title=query[:255]))
-            session.add(
-                Message(
-                    id=uuid.uuid4(),
-                    conversation_id=conv_id,
-                    role="user",
-                    content=query,
-                    trace_id=trace_id,
-                )
+            return await record_user_message(
+                session,
+                user_id=principal.sub,
+                query=query,
+                trace_id=trace_id,
+                conversation_id=conversation_id,
             )
-            await session.commit()
-        return conv_id
 
     async def _record_answer(
         self,
@@ -240,15 +235,20 @@ class SqlAnswerer:
     ) -> uuid.UUID:
         message_id = uuid.uuid4()
         detail: dict[str, Any] = {"sql": asdict(sql_detail)}
+        if is_dont_know(answer):
+            detail["fallback"] = True
         if route is not None:
             detail["route"] = route
         async with self._session_factory() as session:
+            stored = await seal_message(
+                session, conversation_id=conversation_id, message_id=message_id, text=answer
+            )
             session.add(
                 Message(
                     id=message_id,
                     conversation_id=conversation_id,
                     role="assistant",
-                    content=answer,
+                    content=stored,
                     trace_id=trace_id,
                     cost_usd=cost,
                     latency_ms=latency_ms,

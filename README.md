@@ -103,3 +103,31 @@ sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"
 curl -X POST localhost:8000/api/webhooks/ingest -H "content-type: application/json" \
   -H "x-hub-signature-256: $sig" -d "$body"
 ```
+
+## Conversation history
+
+History is per user: a signed-in caller only reads, extends, or deletes their
+own conversations. With `ENCRYPTION_KEY` set, message bodies and conversation
+titles are sealed at rest with AES-256-GCM. Each conversation gets its own data
+key, wrapped by the key-encryption key, and every payload is bound to its row
+through associated data, so a ciphertext cannot be moved to another row and
+still open. Generate a key with:
+
+```sh
+python -c "from app.core.crypto import generate_key; print(generate_key())"
+```
+
+History written before a key existed stays readable as plaintext. Backfill
+seals those rows; rotation rewraps the data keys under a new key without
+touching the message bodies:
+
+```sh
+make history-backfill            # run with ENCRYPTION_KEY set
+make history-rotate OLD_KEY=...  # run with the new ENCRYPTION_KEY set
+```
+
+Deleting a conversation, or the whole history, is a hard cascade: messages and
+their feedback go, along with eval candidates filed from those messages that
+are still awaiting review. Promoted or rejected cases survive with their
+redacted prompt. In the web app each conversation row has a delete action and
+the Recent header has "Clear all"; both call the owner-scoped API.

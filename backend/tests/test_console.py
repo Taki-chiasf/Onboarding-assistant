@@ -78,7 +78,7 @@ async def _get(app: FastAPI, path: str) -> Any:
 
 
 def test_is_dont_know_normalizes_punctuation_and_case() -> None:
-    from app.eval.report import is_dont_know
+    from app.core.fallback import is_dont_know
 
     assert is_dont_know("I don't know")
     assert is_dont_know("I don't know.")
@@ -193,7 +193,7 @@ async def test_attention_list_maps_reasons_and_questions(monkeypatch: pytest.Mon
         role="assistant",
         content=CITE_OR_DIE,
         trace_id="trace-1",
-        detail={"route": {"intent": "ambiguous", "router_confidence": 0.2}},
+        detail={"fallback": True, "route": {"intent": "ambiguous", "router_confidence": 0.2}},
         created_at=asked,
     )
     question = Message(
@@ -205,8 +205,18 @@ async def test_attention_list_maps_reasons_and_questions(monkeypatch: pytest.Mon
     )
     session = _StubSession(
         [
-            _Rows([(answer, "alex-chen")]),
-            _Rows([(conversation_id, question.content, question.created_at)]),
+            _Rows([(answer, "alex-chen", None)]),
+            _Rows(
+                [
+                    (
+                        question.id,
+                        conversation_id,
+                        question.content,
+                        question.created_at,
+                        None,
+                    )
+                ]
+            ),
         ]
     )
     _use_session(app, session)
@@ -478,7 +488,10 @@ async def test_console_reads_live_rows(
                 role="assistant",
                 content=CITE_OR_DIE,
                 trace_id="trace-console-live",
-                detail={"route": {"intent": "rag-docs", "router_confidence": 0.9}},
+                detail={
+                    "fallback": True,
+                    "route": {"intent": "rag-docs", "router_confidence": 0.9},
+                },
                 created_at=asked + timedelta(seconds=1),
             )
         )

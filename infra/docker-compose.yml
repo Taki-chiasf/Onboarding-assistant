@@ -68,6 +68,7 @@ services:
       DAILY_COST_ALERT_USD: ${DAILY_COST_ALERT_USD:-1.0}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       WEBHOOK_BRANCH: ${WEBHOOK_BRANCH:-main}
       TEMPO_URL: ${TEMPO_URL:-http://tempo:3200}
@@ -89,6 +90,7 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
     depends_on:
       db:
         condition: service_healthy

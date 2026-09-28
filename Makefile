@@ -5,7 +5,8 @@ COMPOSE := docker compose --project-directory . -f infra/docker-compose.yml
 
 .PHONY: help up down obs logs ps seed ingest eval eval-nightly demo-reset \
         install backend-install web-install \
-        lint fmt typecheck test test-backend test-web retention pii-scan
+        lint fmt typecheck test test-backend test-web retention pii-scan \
+        history-backfill history-rotate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -42,6 +43,12 @@ demo-reset: ## Reset demo data and clear conversation history
 
 retention: ## Delete audit logs and eval records past the retention window
 	$(COMPOSE) run --rm worker python -m app.retention
+
+history-backfill: ## Encrypt plaintext conversation history under ENCRYPTION_KEY
+	$(COMPOSE) run --rm worker python -m app.history backfill
+
+history-rotate: ## Rewrap data keys under a new ENCRYPTION_KEY (OLD_KEY=...)
+	$(COMPOSE) run --rm worker python -m app.history rotate --old-key "$(OLD_KEY)"
 
 pii-scan: ## Scan the repository for non-synthetic PII
 	cd backend && uv run python -m scripts.pii_scan
