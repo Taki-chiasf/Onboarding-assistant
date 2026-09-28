@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     # Incoming-webhook URL for the nightly eval alert. Empty disables posting.
     slack_eval_webhook_url: str = ""
 
+    # Shared secret for signed reingest webhooks (repo push, drive/docs edit).
+    # Empty rejects every webhook: the endpoint is considered unconfigured.
+    webhook_secret: str = ""
+    # The branch a repo push must target to trigger a reindex.
+    webhook_branch: str = "main"
+
     # Base URL of the trace backend (Tempo HTTP API) for the admin span viewer.
     tempo_url: str = ""
 

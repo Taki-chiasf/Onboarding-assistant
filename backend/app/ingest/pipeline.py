@@ -20,7 +20,7 @@ from app.core.moderation import record_screen, screen
 from app.ingest.ocr import ocr_pdf_markdown
 from app.llm.provider import MistralProvider
 from app.models import DocChunk
-from app.rag import Chunk, chunk_id, chunk_markdown
+from app.rag import Chunk, chunk_id, chunk_markdown, chunk_with_lines
 
 CORPUS_ROOT = Path(__file__).resolve().parents[2] / "seed_corpus"
 
@@ -31,6 +31,7 @@ SOURCE_TYPE_BY_CATEGORY: dict[str, str] = {
     "handbook": "handbook",
     "runbooks": "runbook",
     "engineering": "engineering",
+    "code": "code",
     "pdfs": "policy",
 }
 
@@ -39,9 +40,12 @@ ACL_TAGS_BY_SOURCE_TYPE: dict[str, list[str]] = {
     "handbook": ["dept:all", "role:employee"],
     "runbook": ["dept:all", "role:employee"],
     "engineering": ["dept:Engineering", "role:employee"],
+    "code": ["dept:Engineering", "role:employee"],
 }
 
 DEFAULT_ACL_TAGS = ["dept:all", "role:employee"]
+
+CORPUS_SUFFIXES = frozenset({".md", ".pdf", ".py", ".sh", ".ts", ".tsx", ".js", ".sql"})
 
 EMBED_BATCH_SIZE = 64
 
@@ -82,7 +86,7 @@ def acl_tags_for(source_type: str) -> list[str]:
 def iter_corpus(root: Path) -> list[CorpusFile]:
     files: list[CorpusFile] = []
     for path in sorted(root.rglob("*")):
-        if path.suffix not in {".md", ".pdf"}:
+        if path.suffix not in CORPUS_SUFFIXES:
             continue
         relative = path.relative_to(root)
         files.append(
@@ -96,6 +100,13 @@ def iter_corpus(root: Path) -> list[CorpusFile]:
 
 
 def chunk_file(corpus_file: CorpusFile, markdown: str) -> list[Chunk]:
+    if corpus_file.source_type == "code":
+        return chunk_with_lines(
+            corpus_file.source_uri,
+            corpus_file.source_type,
+            markdown,
+            acl_tags_for(corpus_file.source_type),
+        )
     return chunk_markdown(
         corpus_file.source_uri,
         corpus_file.source_type,

@@ -20,7 +20,11 @@ def _principal() -> Principal:
 def _models() -> ModelConfig:
     return ModelConfig(
         provider="mistral",
-        models={"grounding": "mistral-large-2512", "embed": "mistral-embed"},
+        models={
+            "grounding": "mistral-large-2512",
+            "rag_code": "codestral-2508",
+            "embed": "mistral-embed",
+        },
     )
 
 
@@ -58,12 +62,14 @@ class _FakeProvider:
     def __init__(self, tokens: list[str]) -> None:
         self._tokens = tokens
         self.stream_calls = 0
+        self.stream_models: list[str] = []
 
     def effective_model(self, model: str) -> str:
         return model
 
     async def stream(self, model: str, messages: list[object]) -> AsyncIterator[str]:
         self.stream_calls += 1
+        self.stream_models.append(model)
         for token in self._tokens:
             yield token
 
@@ -151,7 +157,10 @@ async def test_stream_grounds_and_streams_with_chunks(monkeypatch: pytest.Monkey
                 "id": "chunk-1",
                 "source_uri": "file:docs/a.md",
                 "section_anchor": "A",
+                "source_type": "policy",
                 "score": 0.5,
+                "start_line": None,
+                "end_line": None,
             }
         ]
     }
@@ -182,6 +191,20 @@ async def test_stream_passes_source_type_restriction(monkeypatch: pytest.MonkeyP
     _ = [e async for e in answerer.stream("deploy", _principal(), source_types=("engineering",))]
 
     assert retriever.source_types == ("engineering",)
+
+
+async def test_stream_uses_the_configured_model_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    provider = _FakeProvider(["ok"])
+    answerer, _ = _answerer(provider, [_chunk()])
+
+    events = [
+        e async for e in answerer.stream("where is auth?", _principal(), model_role="rag_code")
+    ]
+
+    assert provider.stream_models == ["codestral-2508"]
+    assert events[-1]["data"]["model"] == "codestral-2508"
 
 
 async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatch) -> None:

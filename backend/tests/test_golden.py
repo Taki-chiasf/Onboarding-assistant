@@ -1,12 +1,13 @@
 import uuid
 
 from app.eval.golden import (
+    INTENT_RAG_CODE,
     INTENT_RAG_DOCS,
     build_golden_set,
     corpus_documents,
     recall_at_k,
 )
-from app.rag import chunk_id
+from app.rag import chunk_id, parse_line_anchor
 
 
 def test_golden_set_has_at_least_fifty_cases() -> None:
@@ -18,7 +19,7 @@ def test_golden_cases_have_expected_sources() -> None:
     cases = build_golden_set()
     for case in cases:
         assert case.expected_source_ids
-        assert case.expected_intent == INTENT_RAG_DOCS
+        assert case.expected_intent in {INTENT_RAG_DOCS, INTENT_RAG_CODE}
         for source_id in case.expected_source_ids:
             uuid.UUID(source_id)
 
@@ -26,7 +27,13 @@ def test_golden_cases_have_expected_sources() -> None:
 def test_golden_set_covers_all_domains() -> None:
     cases = build_golden_set()
     domains = {case.tags[1] for case in cases}
-    assert {"policy", "handbook", "runbook", "engineering"} <= domains
+    assert {"policy", "handbook", "runbook", "engineering", "code"} <= domains
+
+
+def test_golden_set_has_code_cases() -> None:
+    code_cases = [case for case in build_golden_set() if case.expected_intent == INTENT_RAG_CODE]
+    assert len(code_cases) >= 6
+    assert all("code" in case.tags for case in code_cases)
 
 
 def test_golden_set_is_deterministic() -> None:
@@ -48,8 +55,14 @@ def test_expected_ids_match_chunk_ids() -> None:
 
 def test_corpus_documents_has_all_markdown() -> None:
     documents = corpus_documents()
-    assert len(documents) == 44
+    assert len(documents) == 60
     assert all(content.strip() for content in documents.values())
+
+
+def test_code_case_anchors_carry_line_ranges() -> None:
+    assert parse_line_anchor("L12-L40 verify_token") == (12, 40)
+    assert parse_line_anchor("L7 healthz") == (7, 7)
+    assert parse_line_anchor("Parental Leave > Eligibility") is None
 
 
 def test_recall_at_k() -> None:

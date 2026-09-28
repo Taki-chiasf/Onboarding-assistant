@@ -53,6 +53,9 @@ packages = ["app", "scripts"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# The sample corpus is data: it includes a synthetic source tree that is never
+# imported or executed by this project.
+exclude = ["seed_corpus"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
@@ -60,6 +63,8 @@ select = ["E", "F", "I", "W", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# Same reason as the ruff exclude: the synthetic corpus is data, not code.
+exclude = "seed_corpus"
 
 [[tool.mypy.overrides]]
 module = ["sentence_transformers", "sentence_transformers.*"]

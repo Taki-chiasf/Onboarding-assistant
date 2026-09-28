@@ -4,8 +4,9 @@ import { useEffect, useId, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { FileCode, ThumbsDown, ThumbsUp } from "lucide-react";
 
+import { CodeViewer } from "@/components/code-viewer";
 import { PixelCursor } from "@/components/pixel-mark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,9 @@ export type Source = {
   source_uri: string;
   section_anchor: string;
   score: number;
+  source_type?: string;
+  start_line?: number | null;
+  end_line?: number | null;
 };
 
 export type SqlDetail = {
@@ -85,102 +89,124 @@ export function SourcePanel({
   traceId?: string;
 }) {
   const [tab, setTab] = useState<"sources" | "sql" | "trace">("sources");
+  const [openSource, setOpenSource] = useState<Source | null>(null);
   const panelId = useId();
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", stiffness: 400, damping: 32 }}
-      className="mt-3 rounded-lg border text-xs shadow-lift"
-    >
-      <div className="flex gap-5 border-b px-3">
-        {(["sources", "sql", "trace"] as const).map((key) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={cn(
-              "relative py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors",
-              tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {TAB_LABELS[key]}
-            {tab === key && (
-              <motion.span
-                layoutId={`evidence-tab-${panelId}`}
-                className="bg-ramp absolute inset-x-0 -bottom-px h-[2px] rounded-full"
-                transition={{ type: "spring", stiffness: 500, damping: 35 }}
-              />
-            )}
-          </button>
-        ))}
-      </div>
-      <div className="overflow-hidden p-3">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={tab}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.15, ease: EASE }}
-          >
-            {tab === "sources" &&
-              (sources.length > 0 ? (
-                <ul className="divide-y">
-                  {sources.map((source, i) => (
-                    <motion.li
-                      key={source.id}
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        duration: 0.25,
-                        ease: EASE,
-                        delay: Math.min(i * 0.05, 0.3),
-                      }}
-                      className="py-2 first:pt-0 last:pb-0"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <span
-                          aria-hidden
-                          className="mt-[5px] h-[6px] w-[6px] shrink-0"
-                          style={{ background: docketDot(i) }}
-                        />
-                        <div className="min-w-0">
-                          <p className="truncate font-medium">{source.section_anchor}</p>
-                          <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                            {source.source_uri}
-                          </p>
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 400, damping: 32 }}
+        className="mt-3 rounded-lg border text-xs shadow-lift"
+      >
+        <div className="flex gap-5 border-b px-3">
+          {(["sources", "sql", "trace"] as const).map((key) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                "relative py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors",
+                tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {TAB_LABELS[key]}
+              {tab === key && (
+                <motion.span
+                  layoutId={`evidence-tab-${panelId}`}
+                  className="bg-ramp absolute inset-x-0 -bottom-px h-[2px] rounded-full"
+                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="overflow-hidden p-3">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={tab}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.15, ease: EASE }}
+            >
+              {tab === "sources" &&
+                (sources.length > 0 ? (
+                  <ul className="divide-y">
+                    {sources.map((source, i) => (
+                      <motion.li
+                        key={source.id}
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{
+                          duration: 0.25,
+                          ease: EASE,
+                          delay: Math.min(i * 0.05, 0.3),
+                        }}
+                        className="py-2 first:pt-0 last:pb-0"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <span
+                            aria-hidden
+                            className="mt-[5px] h-[6px] w-[6px] shrink-0"
+                            style={{ background: docketDot(i) }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium">{source.section_anchor}</p>
+                            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                              {source.source_uri}
+                            </p>
+                          </div>
+                          {source.source_type === "code" && (
+                            <button
+                              type="button"
+                              onClick={() => setOpenSource(source)}
+                              className="flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground"
+                            >
+                              <FileCode className="h-3.5 w-3.5" />
+                              View file
+                            </button>
+                          )}
                         </div>
-                      </div>
-                    </motion.li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-muted-foreground">No sources recorded for this answer.</p>
-              ))}
-            {tab === "sql" &&
-              (sql ? (
-                <div>
-                  <p className="text-muted-foreground">
-                    {sql.row_count} row{sql.row_count === 1 ? "" : "s"} in {sql.latency_ms}ms
-                    {sql.truncated ? " (truncated)" : ""}
-                  </p>
-                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    {sql.sql}
-                  </pre>
-                </div>
-              ) : (
-                <p className="text-muted-foreground">No live data query for this answer.</p>
-              ))}
-            {tab === "trace" && (
-              <p className="break-all font-mono text-[11px] text-muted-foreground">
-                {traceId ?? "Trace not recorded."}
-              </p>
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-    </motion.div>
+                      </motion.li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-muted-foreground">No sources recorded for this answer.</p>
+                ))}
+              {tab === "sql" &&
+                (sql ? (
+                  <div>
+                    <p className="text-muted-foreground">
+                      {sql.row_count} row{sql.row_count === 1 ? "" : "s"} in {sql.latency_ms}ms
+                      {sql.truncated ? " (truncated)" : ""}
+                    </p>
+                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      {sql.sql}
+                    </pre>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">No live data query for this answer.</p>
+                ))}
+              {tab === "trace" && (
+                <p className="break-all font-mono text-[11px] text-muted-foreground">
+                  {traceId ?? "Trace not recorded."}
+                </p>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </motion.div>
+      {openSource && (
+        <CodeViewer
+          sourceUri={openSource.source_uri}
+          startLine={openSource.start_line}
+          endLine={openSource.end_line}
+          anchor={openSource.section_anchor}
+          onClose={() => setOpenSource(null)}
+        />
+      )}
+    </>
   );
 }
 

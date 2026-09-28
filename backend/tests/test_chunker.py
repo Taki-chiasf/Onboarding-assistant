@@ -1,4 +1,11 @@
-from app.rag import Chunk, chunk_id, chunk_markdown, content_hash
+from app.rag import (
+    Chunk,
+    chunk_id,
+    chunk_markdown,
+    chunk_with_lines,
+    content_hash,
+    parse_line_anchor,
+)
 
 SAMPLE = """# Parental Leave Policy
 
@@ -9,6 +16,20 @@ All employees are eligible for paid parental leave from their first day.
 
 ## Duration
 Employees receive 16 weeks of fully paid leave.
+"""
+
+CODE = """'''Token helpers.'''
+
+import hashlib
+
+
+def sign(key: str, payload: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def verify(key: str, payload: str, signature: str) -> bool:
+    expected = sign(key, payload)
+    return expected == signature
 """
 
 
@@ -75,3 +96,57 @@ def test_chunk_is_a_valid_model() -> None:
         acl_tags=["dept:all"],
     )
     assert chunk.content == "c"
+
+
+def test_chunk_with_lines_anchors_functions() -> None:
+    chunks = chunk_with_lines(
+        "file:code/services/auth/tokens.py",
+        "code",
+        CODE,
+        ["dept:Engineering"],
+    )
+
+    anchors = [chunk.section_anchor for chunk in chunks]
+    assert any("sign" in anchor for anchor in anchors)
+    assert any("verify" in anchor for anchor in anchors)
+    assert all(parse_line_anchor(anchor) is not None for anchor in anchors)
+    assert all(chunk.source_type == "code" for chunk in chunks)
+    assert all(chunk.acl_tags == ["dept:Engineering"] for chunk in chunks)
+
+
+def test_chunk_with_lines_content_matches_the_line_range() -> None:
+    chunks = chunk_with_lines("file:code/a.py", "code", CODE, ["dept:Engineering"])
+    lines = CODE.splitlines()
+
+    for chunk in chunks:
+        start, end = parse_line_anchor(chunk.section_anchor) or (0, 0)
+        assert chunk.content == "\n".join(lines[start - 1 : end])
+
+
+def test_chunk_with_lines_splits_oversized_blocks() -> None:
+    body = "\n".join(f"value_{i} = {i}" for i in range(400))
+    chunks = chunk_with_lines(
+        "file:code/big.py",
+        "code",
+        f"'''Big module.'''\n\n{body}\n",
+        ["dept:all"],
+        max_chunk_chars=200,
+    )
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= 200 for chunk in chunks)
+    assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
+
+
+def test_chunk_with_lines_is_deterministic() -> None:
+    first = chunk_with_lines("file:code/a.py", "code", CODE, ["dept:Engineering"])
+    second = chunk_with_lines("file:code/a.py", "code", CODE, ["dept:Engineering"])
+    assert [(c.chunk_index, c.section_anchor, c.content_hash) for c in first] == [
+        (c.chunk_index, c.section_anchor, c.content_hash) for c in second
+    ]
+    assert [str(c.chunk_index) for c in first] == [str(i) for i in range(len(first))]
+    assert chunk_id("file:code/a.py", 0) == chunk_id("file:code/a.py", 0)
+
+
+def test_chunk_with_lines_handles_blank_input() -> None:
+    assert chunk_with_lines("file:code/empty.py", "code", "\n\n", ["dept:all"]) == []

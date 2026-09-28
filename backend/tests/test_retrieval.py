@@ -175,3 +175,31 @@ async def test_retriever_binds_every_role_the_caller_holds() -> None:
     for params in engine.calls:
         assert params["dept"] == "dept:People"
         assert params["roles"] == ["role:admin", "role:employee"]
+
+
+async def test_retriever_restricts_to_code_source_types() -> None:
+    engine = _FakeEngine([_FakeResult([]), _FakeResult([]), _FakeResult([])])
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 1024]
+
+    retriever = Retriever(cast(AsyncEngine, engine), embed)
+    await retriever.retrieve(
+        "where is auth?", dept="Engineering", role="employee", source_types=("code",)
+    )
+
+    for params in engine.calls:
+        assert params["source_types"] == ["code"]
+
+
+async def test_retriever_omits_the_filter_without_source_types() -> None:
+    engine = _FakeEngine([_FakeResult([]), _FakeResult([]), _FakeResult([])])
+
+    async def embed(texts: list[str]) -> list[list[float]]:
+        return [[0.1] * 1024]
+
+    retriever = Retriever(cast(AsyncEngine, engine), embed)
+    await retriever.retrieve("how much leave?", dept="People", role="employee")
+
+    for params in engine.calls:
+        assert "source_types" not in params

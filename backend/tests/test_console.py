@@ -3,6 +3,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,7 +19,7 @@ from app.core.config import get_settings
 from app.core.otel import current_trace_id
 from app.eval.report import DONT_KNOW_ANSWERS
 from app.main import create_app
-from app.models import Conversation, Feedback, Message, NightlyEvalRun
+from app.models import Conversation, Feedback, IngestJob, Message, NightlyEvalRun
 
 CITE_OR_DIE = sorted(DONT_KNOW_ANSWERS)[0]
 
@@ -135,6 +136,15 @@ async def test_console_endpoints_need_a_database(monkeypatch: pytest.MonkeyPatch
 async def test_ingest_status_serializes_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     app = _app(monkeypatch, MOCK_OIDC="1", DEV_PRINCIPAL_ROLE="admin")
     ingested = datetime(2026, 9, 28, 10, 0, tzinfo=UTC)
+    job = SimpleNamespace(
+        id=uuid.uuid4(),
+        source_uri="repo:refs/heads/main",
+        status="done",
+        rows_written=4,
+        error=None,
+        started_at=ingested,
+        finished_at=ingested + timedelta(seconds=30),
+    )
     session = _StubSession(
         [
             _Rows(
@@ -142,7 +152,8 @@ async def test_ingest_status_serializes_sources(monkeypatch: pytest.MonkeyPatch)
                     ("file:policies/a.md", "policy", 3, ingested),
                     ("file:runbooks/b.md", "runbook", 2, ingested + timedelta(minutes=5)),
                 ]
-            )
+            ),
+            _Rows([job]),
         ]
     )
     _use_session(app, session)
@@ -158,6 +169,17 @@ async def test_ingest_status_serializes_sources(monkeypatch: pytest.MonkeyPatch)
     assert body["sources"][0]["source_uri"] == "file:policies/a.md"
     assert body["sources"][0]["chunks"] == 3
     assert body["last_ingested"].startswith("2026-09-28T10:05")
+    assert body["jobs"] == [
+        {
+            "id": str(job.id),
+            "source_uri": "repo:refs/heads/main",
+            "status": "done",
+            "rows_written": 4,
+            "error": None,
+            "started_at": "2026-09-28T10:00:00+00:00",
+            "finished_at": "2026-09-28T10:00:30+00:00",
+        }
+    ]
     get_settings.cache_clear()
 
 
@@ -434,6 +456,7 @@ async def test_console_reads_live_rows(
     message_id = uuid.uuid4()
     nightly_id = uuid.uuid4()
     feedback_id = uuid.uuid4()
+    job_id = uuid.uuid4()
     asked = datetime.now(UTC)
     async with factory() as session:
         session.add(
@@ -470,12 +493,24 @@ async def test_console_reads_live_rows(
             )
         )
         session.add(Feedback(id=feedback_id, rating="up", source="real"))
+        session.add(
+            IngestJob(
+                id=job_id,
+                source_uri="repo:refs/heads/main",
+                status="done",
+                rows_written=5,
+                started_at=asked,
+                finished_at=asked + timedelta(seconds=2),
+            )
+        )
         await session.commit()
 
     try:
         ingest = await _get(app, "/api/admin/ingest")
         assert ingest.status_code == 200
         assert ingest.json()["total_chunks"] > 0
+        jobs = ingest.json()["jobs"]
+        assert any(job["id"] == str(job_id) and job["status"] == "done" for job in jobs)
 
         attention = await _get(app, "/api/admin/attention")
         assert attention.status_code == 200
@@ -492,6 +527,7 @@ async def test_console_reads_live_rows(
         async with factory() as session:
             await session.execute(delete(Feedback).where(Feedback.id == feedback_id))
             await session.execute(delete(NightlyEvalRun).where(NightlyEvalRun.id == nightly_id))
+            await session.execute(delete(IngestJob).where(IngestJob.id == job_id))
             await session.execute(delete(Message).where(Message.conversation_id == conversation_id))
             await session.execute(delete(Conversation).where(Conversation.id == conversation_id))
             await session.commit()

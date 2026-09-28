@@ -1,9 +1,12 @@
-"""Section-aware chunking for markdown documents.
+"""Section-aware chunking for markdown documents and line-anchored chunking
+for source files.
 
-A document is split along its heading hierarchy so that each chunk carries the
-heading path that locates it in the source. Chunk identifiers and content
-hashes are deterministic, which keeps re-ingestion idempotent and lets the
-evaluation set reference chunks by stable identifiers.
+A markdown document is split along its heading hierarchy so that each chunk
+carries the heading path that locates it in the source. A source file is split
+into contiguous line ranges so that each chunk carries a ``file:line`` anchor
+that the citation viewer can open. Chunk identifiers and content hashes are
+deterministic, which keeps re-ingestion idempotent and lets the evaluation set
+reference chunks by stable identifiers.
 """
 
 from __future__ import annotations
@@ -15,6 +18,17 @@ import uuid
 from pydantic import BaseModel
 
 ATX_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+LINE_ANCHOR = re.compile(r"^L(\d+)(?:-L(\d+))?\b")
+
+CODE_SUFFIXES = frozenset({".py", ".sh", ".ts", ".tsx", ".js", ".sql"})
+
+# The label that gives a line range its identity in a citation: the nearest
+# symbol above the range for code, the nearest heading for markdown.
+LABEL_PATTERNS = (
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:def|function|class)\s+([A-Za-z_]\w*)"),
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*="),
+    re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$"),
+)
 
 DEFAULT_MAX_CHUNK_CHARS = 2000
 
@@ -151,6 +165,141 @@ def chunk_markdown(
 
 def _fallback_title(source_uri: str) -> str:
     stem = source_uri.rsplit("/", 1)[-1]
-    if stem.endswith(".md"):
-        stem = stem[:-3]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
     return stem.replace("-", " ").title()
+
+
+def parse_line_anchor(anchor: str) -> tuple[int, int] | None:
+    """Read the ``L12-L40`` range out of a line-anchored section anchor."""
+    match = LINE_ANCHOR.match(anchor)
+    if match is None:
+        return None
+    start = int(match.group(1))
+    return start, int(match.group(2) or start)
+
+
+def _line_label(line: str) -> str | None:
+    for pattern in LABEL_PATTERNS:
+        match = pattern.match(line)
+        if match is not None:
+            return match.group(1).strip()[:64]
+    return None
+
+
+def _block_label(lines: list[str], start: int, end: int) -> str | None:
+    """The symbol or heading a block introduces, skipping decorators and comments."""
+    for number in range(start, min(end, start + 4) + 1):
+        found = _line_label(lines[number - 1])
+        if found is not None:
+            return found
+    return None
+
+
+def _line_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """Contiguous non-blank line ranges (1-based, inclusive), in file order."""
+    blocks: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, line in enumerate(lines, start=1):
+        if line.strip():
+            start = index if start is None else start
+        elif start is not None:
+            blocks.append((start, index - 1))
+            start = None
+    if start is not None:
+        blocks.append((start, len(lines)))
+    return blocks
+
+
+def _lines_length(lines: list[str], start: int, end: int) -> int:
+    return sum(len(lines[number - 1]) + 1 for number in range(start, end + 1))
+
+
+def _fit_blocks(
+    lines: list[str], blocks: list[tuple[int, int]], max_chunk_chars: int
+) -> list[tuple[int, int]]:
+    """Split blocks that exceed the budget on line boundaries."""
+    fitted: list[tuple[int, int]] = []
+    for start, end in blocks:
+        if _lines_length(lines, start, end) <= max_chunk_chars:
+            fitted.append((start, end))
+            continue
+        piece_start = start
+        length = 0
+        for number in range(start, end + 1):
+            line_length = len(lines[number - 1]) + 1
+            if length and length + line_length > max_chunk_chars:
+                fitted.append((piece_start, number - 1))
+                piece_start = number
+                length = line_length
+            else:
+                length += line_length
+        fitted.append((piece_start, end))
+    return fitted
+
+
+def chunk_with_lines(
+    source_uri: str,
+    source_type: str,
+    text: str,
+    acl_tags: list[str],
+    *,
+    max_chunk_chars: int = DEFAULT_MAX_CHUNK_CHARS,
+) -> list[Chunk]:
+    """Split a source file into chunks carrying ``file:line`` anchors.
+
+    Each chunk is a contiguous run of lines; small blocks separated by blank
+    lines group together, and a block that introduces a symbol (a function,
+    class, or markdown heading) starts a new chunk. The anchor is
+    ``L<start>-L<end> <label>`` where the label is the symbol or heading the
+    chunk opens with.
+    """
+    lines = text.splitlines()
+    blocks = _fit_blocks(lines, _line_blocks(lines), max_chunk_chars)
+
+    labels: dict[int, str] = {}
+    label = _fallback_title(source_uri)
+    for number, line in enumerate(lines, start=1):
+        found = _line_label(line)
+        if found is not None:
+            label = found
+        labels[number] = label
+
+    chunks: list[Chunk] = []
+    index = 0
+    pending: tuple[int, int] | None = None
+    pending_label = ""
+
+    def emit(start: int, end: int, chunk_label: str) -> None:
+        nonlocal index
+        body = "\n".join(lines[start - 1 : end])
+        span = f"L{start}-L{end}" if end > start else f"L{start}"
+        chunks.append(
+            Chunk(
+                source_uri=source_uri,
+                source_type=source_type,
+                section_anchor=f"{span} {chunk_label}",
+                content=body,
+                content_hash=content_hash(body),
+                chunk_index=index,
+                acl_tags=acl_tags,
+            )
+        )
+        index += 1
+
+    for block_start, block_end in blocks:
+        block_label = _block_label(lines, block_start, block_end)
+        if pending is None:
+            pending = (block_start, block_end)
+            pending_label = block_label or labels[block_start]
+        elif block_label is not None or (
+            _lines_length(lines, pending[0], block_end) > max_chunk_chars
+        ):
+            emit(*pending, pending_label)
+            pending = (block_start, block_end)
+            pending_label = block_label or labels[block_start]
+        else:
+            pending = (pending[0], block_end)
+    if pending is not None:
+        emit(*pending, pending_label)
+    return chunks

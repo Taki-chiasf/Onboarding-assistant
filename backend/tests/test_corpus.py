@@ -18,13 +18,20 @@ def test_pdf_sources_reference_real_documents() -> None:
         assert source in known
 
 
-def test_generated_markdown_matches_committed(tmp_path: Path) -> None:
+def test_generated_sources_match_committed(tmp_path: Path) -> None:
     written = write_markdown(tmp_path)
     assert written >= 40
 
-    committed = {p.relative_to(CORPUS_ROOT) for p in CORPUS_ROOT.rglob("*.md")}
-    generated = {p.relative_to(tmp_path) for p in tmp_path.rglob("*.md")}
-    assert committed == generated
+    def sources(root: Path) -> set[Path]:
+        return {
+            path.relative_to(root)
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix != ".pdf"
+        }
+
+    assert sources(CORPUS_ROOT) == sources(tmp_path)
+    assert Path("code/README.md") in sources(CORPUS_ROOT)
+    assert Path("code/services/auth/tokens.py") in sources(CORPUS_ROOT)
 
 
 def test_generated_pdfs_match_committed(tmp_path: Path) -> None:

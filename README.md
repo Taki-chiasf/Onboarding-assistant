@@ -67,3 +67,39 @@ modes cover local development and the public demo:
 The demo data is fully synthetic: a fictional company with departments, people,
 projects, assets, objectives, tickets, and a document corpus. No real company
 data is used anywhere.
+
+## Codebase answers
+
+The corpus includes a synthetic service repository under
+`backend/seed_corpus/code/` (READMEs, ADRs, runbooks, and source files). Code
+questions are answered by Codestral over the `code` source type, and every
+citation carries a `file:line` anchor that opens a read-only viewer in the chat
+transcript. Code chunks are scoped to the Engineering department, like the rest
+of the engineering corpus.
+
+## Reingest webhooks
+
+`POST /api/webhooks/ingest` accepts signed source-edit notifications and queues
+a reingest on the worker queue. Reingest is idempotent - unchanged chunks are
+skipped by content hash - so a redelivered webhook is harmless. The request body
+is JSON and the signature is an HMAC-SHA256 of the raw body with
+`WEBHOOK_SECRET` as the key, sent as `X-Hub-Signature-256` (or
+`X-Webhook-Signature`) in the `sha256=<hex>` form.
+
+- Repository push:
+  `{"source": "repo", "ref": "refs/heads/main", "changed": ["services/auth/app.py"]}`.
+  Only pushes to `WEBHOOK_BRANCH` (default `main`) trigger a reindex.
+- Drive or docs edit:
+  `{"source": "drive", "changed": ["file:policies/parental-leave.md"]}`. This
+  generic form is the seam for a real integration; no provider-specific client
+  ships in this repo.
+
+An unset `WEBHOOK_SECRET` rejects every webhook, and each accepted delivery
+appears as a job in the admin console's Ingest tab.
+
+```sh
+body='{"source":"repo","ref":"refs/heads/main"}'
+sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+curl -X POST localhost:8000/api/webhooks/ingest -H "content-type: application/json" \
+  -H "x-hub-signature-256: $sig" -d "$body"
+```

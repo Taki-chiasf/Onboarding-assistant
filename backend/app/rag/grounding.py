@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from app.llm.provider import ChatMessage
 from app.prompts.loader import load_prompt, prompt_version
+from app.rag.chunker import parse_line_anchor
 from app.rag.retrieval import RetrievedChunk
 
 CITE_OR_DIE = "I don't know"
@@ -22,19 +23,28 @@ class Source:
     id: str
     source_uri: str
     section_anchor: str
+    source_type: str
     score: float
+    start_line: int | None = None
+    end_line: int | None = None
 
 
 def to_sources(chunks: list[RetrievedChunk]) -> list[Source]:
-    return [
-        Source(
-            id=chunk.id,
-            source_uri=chunk.source_uri,
-            section_anchor=chunk.section_anchor,
-            score=chunk.score,
+    sources: list[Source] = []
+    for chunk in chunks:
+        line_span = parse_line_anchor(chunk.section_anchor)
+        sources.append(
+            Source(
+                id=chunk.id,
+                source_uri=chunk.source_uri,
+                section_anchor=chunk.section_anchor,
+                source_type=chunk.source_type,
+                score=chunk.score,
+                start_line=line_span[0] if line_span else None,
+                end_line=line_span[1] if line_span else None,
+            )
         )
-        for chunk in chunks
-    ]
+    return sources
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:

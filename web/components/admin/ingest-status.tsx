@@ -11,11 +11,29 @@ type IngestSource = {
   last_ingested: string;
 };
 
+type IngestJob = {
+  id: string;
+  source_uri: string;
+  status: string;
+  rows_written: number | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 type IngestStatus = {
   total_chunks: number;
   total_sources: number;
   last_ingested: string | null;
   sources: IngestSource[];
+  jobs: IngestJob[];
+};
+
+const JOB_TONES: Record<string, "ok" | "warn" | "error" | "neutral"> = {
+  queued: "neutral",
+  running: "warn",
+  done: "ok",
+  failed: "error",
 };
 
 function when(iso: string | null): string {
@@ -89,6 +107,55 @@ export function IngestPanel() {
           </table>
         </div>
       )}
+
+      <section>
+        <h2 className="px-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+          Webhook jobs
+        </h2>
+        {data.jobs.length === 0 ? (
+          <p className="px-1 py-3 text-sm text-muted-foreground">
+            No source edits have triggered a reingest yet.
+          </p>
+        ) : (
+          <div className="mt-3 border-y">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  <th className="py-2 pr-4 pl-3 font-normal">Status</th>
+                  <th className="py-2 pr-4 font-normal">Trigger</th>
+                  <th className="py-2 pr-4 text-right font-normal">Rows</th>
+                  <th className="py-2 pr-3 text-right font-normal">Started</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.jobs.map((job) => (
+                  <tr key={job.id} className="border-t align-top">
+                    <td className="py-2 pr-4 pl-3">
+                      <Flag tone={JOB_TONES[job.status] ?? "neutral"}>{job.status}</Flag>
+                    </td>
+                    <td className="max-w-0 py-2 pr-4">
+                      <span className="block truncate font-mono text-[12px]">
+                        {job.source_uri}
+                      </span>
+                      {job.error && (
+                        <span className="mt-0.5 block truncate text-xs text-destructive">
+                          {job.error}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {job.rows_written ?? "—"}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-xs text-muted-foreground">
+                      {when(job.started_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

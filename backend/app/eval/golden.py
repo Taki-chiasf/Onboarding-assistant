@@ -11,10 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.ingest.pipeline import acl_tags_for, source_type_for
-from app.rag import chunk_id, chunk_markdown
+from app.rag import chunk_id, chunk_markdown, chunk_with_lines
 from scripts.corpus import CATEGORIES
 
 INTENT_RAG_DOCS = "rag-docs"
+INTENT_RAG_CODE = "rag-code"
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class CaseSpec:
     source_uri: str
     anchor: str
     tags: list[str]
+    intent: str = INTENT_RAG_DOCS
 
 
 @dataclass(frozen=True)
@@ -350,6 +352,48 @@ SPECS: list[CaseSpec] = [
         "Secrets",
         ["engineering", "engineering"],
     ),
+    CaseSpec(
+        "How do I run the auth service locally?",
+        "file:code/docs/runbooks/auth-service.md",
+        "Running locally",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
+    CaseSpec(
+        "Where is an access token verified?",
+        "file:code/services/auth/tokens.py",
+        "verify_token",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
+    CaseSpec(
+        "How does the payments API prevent duplicate charges?",
+        "file:code/services/payments/ledger.py",
+        "record",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
+    CaseSpec(
+        "How are failed notification deliveries retried?",
+        "file:code/services/notifications/worker.py",
+        "deliver_with_retry",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
+    CaseSpec(
+        "How do services read environment settings?",
+        "file:code/libs/common/config.py",
+        "from_env",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
+    CaseSpec(
+        "Why do storage, search, and vectors share one Postgres?",
+        "file:code/docs/adr/0002-postgres-and-search.md",
+        "Decision",
+        ["engineering", "code"],
+        intent=INTENT_RAG_CODE,
+    ),
 ]
 
 
@@ -371,16 +415,26 @@ def build_golden_set() -> list[GoldenCase]:
     for spec in SPECS:
         markdown = documents[spec.source_uri]
         source_type = source_type_for(_category_for(spec.source_uri))
-        chunks = chunk_markdown(spec.source_uri, source_type, markdown, acl_tags_for(source_type))
-        title = chunks[0].section_anchor.split(" > ")[0] if chunks else spec.source_uri
-        target = f"{title} > {spec.anchor}" if spec.anchor else title
-        matched = [chunk for chunk in chunks if chunk.section_anchor == target]
+        if source_type == "code":
+            chunks = chunk_with_lines(
+                spec.source_uri, source_type, markdown, acl_tags_for(source_type)
+            )
+            matched = [
+                chunk for chunk in chunks if spec.anchor.lower() in chunk.section_anchor.lower()
+            ]
+        else:
+            chunks = chunk_markdown(
+                spec.source_uri, source_type, markdown, acl_tags_for(source_type)
+            )
+            title = chunks[0].section_anchor.split(" > ")[0] if chunks else spec.source_uri
+            target = f"{title} > {spec.anchor}" if spec.anchor else title
+            matched = [chunk for chunk in chunks if chunk.section_anchor == target]
         if not matched:
             raise ValueError(f"no chunks matched {spec.source_uri!r} anchor {spec.anchor!r}")
         cases.append(
             GoldenCase(
                 prompt=spec.prompt,
-                expected_intent=INTENT_RAG_DOCS,
+                expected_intent=spec.intent,
                 expected_source_ids=[
                     str(chunk_id(spec.source_uri, chunk.chunk_index)) for chunk in matched
                 ],

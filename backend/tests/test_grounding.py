@@ -60,7 +60,26 @@ def test_to_sources_maps_fields() -> None:
     sources = to_sources(chunks)
     assert sources[0].id == "a"
     assert sources[0].source_uri == "file:docs/a.md"
+    assert sources[0].source_type == "policy"
     assert sources[0].score == 0.5
+    assert sources[0].start_line is None
+    assert sources[0].end_line is None
+
+
+def test_to_sources_reads_code_line_anchors() -> None:
+    chunk = RetrievedChunk(
+        id="code-1",
+        source_uri="file:code/services/auth/tokens.py",
+        section_anchor="L45-L60 verify_token",
+        content="def verify_token(): ...",
+        source_type="code",
+        similarity=0.8,
+        score=0.6,
+    )
+    sources = to_sources([chunk])
+    assert sources[0].source_type == "code"
+    assert sources[0].start_line == 45
+    assert sources[0].end_line == 60
 
 
 def test_cite_or_die_is_exact_fallback() -> None:

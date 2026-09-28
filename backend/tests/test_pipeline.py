@@ -38,11 +38,13 @@ def test_source_type_mapping() -> None:
     assert source_type_for("handbook") == "handbook"
     assert source_type_for("runbooks") == "runbook"
     assert source_type_for("engineering") == "engineering"
+    assert source_type_for("code") == "code"
     assert source_type_for("pdfs") == "policy"
 
 
 def test_acl_tags_restrict_engineering() -> None:
     assert acl_tags_for("engineering") == ["dept:Engineering", "role:employee"]
+    assert acl_tags_for("code") == ["dept:Engineering", "role:employee"]
     assert acl_tags_for("policy") == ["dept:all", "role:employee"]
 
 
@@ -53,18 +55,22 @@ def test_iter_corpus_discovers_files(tmp_path: Path) -> None:
     (tmp_path / "engineering" / "b.md").write_text("# B")
     (tmp_path / "pdfs").mkdir()
     (tmp_path / "pdfs" / "c.pdf").write_bytes(b"%PDF")
+    (tmp_path / "code").mkdir()
+    (tmp_path / "code" / "service.py").write_text("# code")
     (tmp_path / "ignored.txt").write_text("x")
 
     files = iter_corpus(tmp_path)
 
-    assert len(files) == 3
+    assert len(files) == 4
     uris = {f.source_uri for f in files}
     assert "file:policies/a.md" in uris
     assert "file:engineering/b.md" in uris
     assert "file:pdfs/c.pdf" in uris
+    assert "file:code/service.py" in uris
     by_uri = {f.source_uri: f for f in files}
     assert by_uri["file:engineering/b.md"].source_type == "engineering"
     assert by_uri["file:pdfs/c.pdf"].source_type == "policy"
+    assert by_uri["file:code/service.py"].source_type == "code"
 
 
 def test_chunk_file_sets_acl_and_type() -> None:
@@ -74,6 +80,19 @@ def test_chunk_file_sets_acl_and_type() -> None:
     chunks = chunk_file(corpus_file, "# Title\n\n## Section\nbody")
     assert chunks
     assert all(c.source_type == "engineering" for c in chunks)
+    assert all(c.acl_tags == ["dept:Engineering", "role:employee"] for c in chunks)
+
+
+def test_chunk_file_uses_line_anchors_for_code() -> None:
+    corpus_file = CorpusFile(
+        source_uri="file:code/service.py",
+        source_type="code",
+        path=Path("service.py"),
+    )
+    chunks = chunk_file(corpus_file, "def run() -> None:\n    return None\n")
+    assert chunks
+    assert chunks[0].section_anchor.startswith("L1")
+    assert "run" in chunks[0].section_anchor
     assert all(c.acl_tags == ["dept:Engineering", "role:employee"] for c in chunks)
 
 

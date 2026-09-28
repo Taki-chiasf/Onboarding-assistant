@@ -23,7 +23,9 @@ def write_markdown(root: Path) -> int:
         category_dir = root / category
         category_dir.mkdir(parents=True, exist_ok=True)
         for filename, content in docs:
-            (category_dir / filename).write_text(content, encoding="utf-8")
+            path = category_dir / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
             written += 1
     return written
 

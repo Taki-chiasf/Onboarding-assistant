@@ -52,6 +52,7 @@ class _FakeRouter:
 class _FakeRag:
     def __init__(self) -> None:
         self.source_types: Sequence[str] | None = None
+        self.model_role: str | None = None
         self.route: dict[str, Any] | None = None
         self.calls = 0
 
@@ -62,10 +63,12 @@ class _FakeRag:
         conversation_id: object = None,
         *,
         source_types: Sequence[str] | None = None,
+        model_role: str = "grounding",
         route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         self.calls += 1
         self.source_types = source_types
+        self.model_role = model_role
         self.route = route
         yield {"event": "sources", "data": {"conversation_id": "c1", "sources": []}}
         yield {"event": "token", "data": {"text": "doc answer"}}
@@ -146,7 +149,7 @@ async def test_dispatches_rag_docs(monkeypatch: pytest.MonkeyPatch) -> None:
     assert events[-1]["data"]["intent"] == "rag-docs"
 
 
-async def test_dispatches_rag_code_with_source_types(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispatches_rag_code_to_the_code_index(monkeypatch: pytest.MonkeyPatch) -> None:
     added: list[Any] = []
     _patch_session_factory(monkeypatch, added)
     rag, sql = _FakeRag(), _FakeSql()
@@ -155,7 +158,19 @@ async def test_dispatches_rag_code_with_source_types(monkeypatch: pytest.MonkeyP
     _ = [e async for e in dispatcher.stream("where is auth?", _principal())]
 
     assert rag.calls == 1
-    assert rag.source_types == ("engineering", "runbook")
+    assert rag.source_types == ("code",)
+    assert rag.model_role == "rag_code"
+
+
+async def test_dispatches_rag_docs_with_the_grounding_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    rag, sql = _FakeRag(), _FakeSql()
+    dispatcher = _dispatcher(_FakeRouter(_decision(Intent.RAG_DOCS)), rag, sql)
+
+    _ = [e async for e in dispatcher.stream("policy?", _principal())]
+
+    assert rag.model_role == "grounding"
 
 
 async def test_dispatches_text_to_sql(monkeypatch: pytest.MonkeyPatch) -> None:

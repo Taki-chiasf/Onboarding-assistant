@@ -40,7 +40,8 @@ REFUSAL = (
     "Try asking about policies, teams, projects, assets, or where to find a document."
 )
 
-RAG_CODE_SOURCE_TYPES: tuple[str, ...] = ("engineering", "runbook")
+RAG_CODE_SOURCE_TYPES: tuple[str, ...] = ("code",)
+RAG_CODE_MODEL_ROLE = "rag_code"
 
 SURFACE_INTENT: dict[Surface, Intent] = {
     Surface.RAG_DOCS: Intent.RAG_DOCS,
@@ -140,6 +141,7 @@ class ChatDispatcher:
                 principal,
                 conversation_id,
                 source_types=RAG_CODE_SOURCE_TYPES,
+                model_role=RAG_CODE_MODEL_ROLE,
                 route=route,
             )
         return self._rag.stream(query, principal, conversation_id, route=route)

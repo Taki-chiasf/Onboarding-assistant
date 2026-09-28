@@ -59,6 +59,7 @@ class RagAnswerer:
         conversation_id: uuid.UUID | None = None,
         *,
         source_types: Sequence[str] | None = None,
+        model_role: str = "grounding",
         route: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         started = perf_counter()
@@ -70,6 +71,7 @@ class RagAnswerer:
             trace_id = current_trace_id() or uuid.uuid4().hex
             span.set_attribute("user.dept", principal.dept)
             span.set_attribute("user.role", principal.role)
+            span.set_attribute("answer.model_role", model_role)
             if source_types is not None:
                 span.set_attribute("retrieve.source_types", list(source_types))
 
@@ -89,7 +91,7 @@ class RagAnswerer:
                 },
             }
 
-            grounding_model = self._models.models["grounding"]
+            answer_model = self._models.models[model_role]
 
             if not chunks:
                 answer = CITE_OR_DIE
@@ -101,14 +103,14 @@ class RagAnswerer:
                 tokens_in = estimate_tokens("".join(m.content for m in messages))
                 parts: list[str] = []
                 with tracer.start_as_current_span("ground"):
-                    async for token in self._provider.stream(grounding_model, messages):
+                    async for token in self._provider.stream(answer_model, messages):
                         parts.append(token)
                         yield {"event": "token", "data": {"text": token}}
                 answer = "".join(parts)
 
             latency_ms = int((perf_counter() - started) * 1000)
             tokens_out = estimate_tokens(answer)
-            served_model = self._provider.effective_model(grounding_model)
+            served_model = self._provider.effective_model(answer_model)
             cost: Decimal = (
                 compute_cost(served_model, tokens_in, tokens_out) if chunks else Decimal("0")
             )

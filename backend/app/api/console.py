@@ -24,7 +24,7 @@ from app.api.admin import AdminDep, SessionFactoryDep
 from app.core.deps import SettingsDep
 from app.eval.gates import GATES
 from app.eval.report import FALLBACK_TEXTS, is_dont_know
-from app.models import Conversation, DocChunk, Feedback, Message, NightlyEvalRun
+from app.models import Conversation, DocChunk, Feedback, IngestJob, Message, NightlyEvalRun
 from app.router.guardrails import LOW_CONFIDENCE
 
 router = APIRouter(prefix="/api/admin", tags=["console"])
@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/admin", tags=["console"])
 MAX_ROWS = 200
 MAX_TRACE_SPANS = 500
 MAX_ATTRIBUTE_CHARS = 200
+MAX_INGEST_JOBS = 20
 
 
 class IngestSource(BaseModel):
@@ -41,11 +42,22 @@ class IngestSource(BaseModel):
     last_ingested: str
 
 
+class IngestJobStatus(BaseModel):
+    id: str
+    source_uri: str
+    status: str
+    rows_written: int | None
+    error: str | None
+    started_at: str | None
+    finished_at: str | None
+
+
 class IngestStatus(BaseModel):
     total_chunks: int
     total_sources: int
     last_ingested: str | None
     sources: list[IngestSource]
+    jobs: list[IngestJobStatus]
 
 
 class AttentionItem(BaseModel):
@@ -123,6 +135,17 @@ async def ingest_status(_admin: AdminDep, factory: SessionFactoryDep) -> IngestS
                 .order_by(DocChunk.source_uri)
             )
         ).all()
+        jobs = (
+            (
+                await session.execute(
+                    select(IngestJob)
+                    .order_by(IngestJob.started_at.desc().nullslast())
+                    .limit(MAX_INGEST_JOBS)
+                )
+            )
+            .scalars()
+            .all()
+        )
     sources = [
         IngestSource(
             source_uri=source_uri,
@@ -137,6 +160,18 @@ async def ingest_status(_admin: AdminDep, factory: SessionFactoryDep) -> IngestS
         total_sources=len(sources),
         last_ingested=max((source.last_ingested for source in sources), default=None),
         sources=sources,
+        jobs=[
+            IngestJobStatus(
+                id=str(job.id),
+                source_uri=job.source_uri,
+                status=job.status,
+                rows_written=job.rows_written,
+                error=job.error,
+                started_at=job.started_at.isoformat() if job.started_at else None,
+                finished_at=job.finished_at.isoformat() if job.finished_at else None,
+            )
+            for job in jobs
+        ],
     )
 
 
