@@ -67,24 +67,30 @@ async def test_retrieval_eval_all_miss() -> None:
 
 async def test_judge_answer_pass() -> None:
     client = MagicMock()
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="pass"))]
-    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="pass"))])
     client.chat.complete_async = AsyncMock(return_value=response)
     provider = MistralProvider(cast(Mistral, client))
 
-    assert await judge_answer(provider, "judge-model", "q", "a", "context") is True
+    verdict = await judge_answer(provider, "judge-model", "q", "a", "context")
+    assert verdict.passed is True
+    assert verdict.reason is None
 
 
-async def test_judge_answer_fail() -> None:
+async def test_judge_answer_fail_carries_a_reason() -> None:
     client = MagicMock()
     response = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="fail"))]
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="fail\nThe answer missed the policy citation.")
+            )
+        ]
     )
     client.chat.complete_async = AsyncMock(return_value=response)
     provider = MistralProvider(cast(Mistral, client))
 
-    assert await judge_answer(provider, "judge-model", "q", "a", "context") is False
+    verdict = await judge_answer(provider, "judge-model", "q", "a", "context")
+    assert verdict.passed is False
+    assert verdict.reason == "The answer missed the policy citation."
 
 
 def test_summary_dataclasses_are_frozen() -> None:
@@ -97,9 +103,7 @@ class _FakeAnswerProvider:
     def effective_model(self, model: str) -> str:
         return model
 
-    async def stream(
-        self, model: str, messages: Sequence[ChatMessage]
-    ) -> AsyncIterator[str]:
+    async def stream(self, model: str, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
         yield "grounded "
         yield "answer"
 

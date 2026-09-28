@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # Retention window for query audit logs and eval-run records.
     retention_days: int = 90
 
+    # Incoming-webhook URL for the nightly eval alert. Empty disables posting.
+    slack_eval_webhook_url: str = ""
+
     sql_readonly_role: str = "app_readonly"
     sql_statement_timeout_ms: int = 5000
     sql_max_rows: int = 100

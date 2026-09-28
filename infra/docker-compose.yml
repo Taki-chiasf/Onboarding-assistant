@@ -165,6 +165,26 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Nightly loop: replay the eval set, record per-case runs, compare to the
+  # last green night, and alert the webhook when configured. Scheduling is
+  # external (a cron entry or a platform scheduled machine); running the
+  # service executes the loop once and exits 0 when green.
+  eval-nightly:
+    build:
+      context: .
+      dockerfile: eval-runner/Dockerfile
+    profiles: ["eval"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mistral}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      SLACK_EVAL_WEBHOOK_URL: ${SLACK_EVAL_WEBHOOK_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   tempo:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yaml"]

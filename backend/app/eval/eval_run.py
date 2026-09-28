@@ -15,10 +15,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncEngine
+from typing import Any
 
 from app.eval.baseline import (
     Baseline,
@@ -28,7 +25,6 @@ from app.eval.baseline import (
     save_baseline,
 )
 from app.eval.gates import GATES
-from app.eval.rag_eval import AnswerEvalSummary
 from app.eval.report import (
     RunReport,
     dont_know_metric,
@@ -42,6 +38,7 @@ from app.eval.report import (
 from app.eval.router_eval import RouterEvalSummary
 from app.eval.security import SecuritySummary
 from app.eval.sql_eval import SqlEvalSummary
+from app.eval.suites import SuiteRun
 
 logger = logging.getLogger(__name__)
 
@@ -126,15 +123,19 @@ def combined_versions(versions: dict[str, str]) -> str:
     return "+".join(sorted(versions.values())) if versions else "unknown"
 
 
-async def _corpus_ready(engine: AsyncEngine) -> bool:
-    from sqlalchemy import text
-
-    try:
-        async with engine.connect() as conn:
-            count = (await conn.execute(text("SELECT count(*) FROM doc_chunks"))).scalar()
-    except Exception:  # noqa: BLE001 - a missing table just means "not ingested yet"
-        return False
-    return bool(count)
+def to_metric_sources(run: SuiteRun) -> MetricSources:
+    answer = run.answer_summary
+    return MetricSources(
+        router=run.router_summary,
+        sql=run.sql_summary,
+        security=run.security_summary,
+        recall_at_5=run.retrieval_summary.recall_at_5 if run.retrieval_summary else None,
+        answer_latencies_s=answer.latencies_s if answer else (),
+        first_token_latencies_s=answer.first_token_latencies_s if answer else (),
+        costs_usd=answer.costs_usd if answer else (),
+        judge_verdicts=answer.judge_verdicts if answer else (),
+        answers=answer.answers if answer else (),
+    )
 
 
 async def _run_suites(
@@ -143,107 +144,16 @@ async def _run_suites(
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from app.core.config import get_settings
-    from app.eval.router_golden import build_router_set
-    from app.eval.security import run_security_canaries
-    from app.eval.sql_golden import PERSONAS, build_sql_set
-    from app.llm.client import get_provider
-    from app.llm.fake import FakeProvider
-    from app.llm.models import load_models
-    from app.rag.retrieval import Retriever
-    from app.router.router import IntentRouter
-    from app.text_to_sql.builder import SqlBuilder
-    from app.text_to_sql.executor import SqlExecutor
+    from app.eval.suites import run_suites
 
     settings = get_settings()
-    models = load_models()
-    keyless = args.keyless or not settings.mistral_api_key
-    if keyless:
-        logger.warning("running keyless: model-quality metrics are pipeline smoke tests only")
-
-    from app.eval.router_eval import make_keyless_provider as router_keyless
-    from app.eval.router_eval import run_router_eval
-    from app.eval.sql_eval import make_keyless_provider as sql_keyless
-    from app.eval.sql_eval import run_sql_eval
-
-    router_cases = build_router_set()
-    sql_cases = build_sql_set()
-
-    provider = FakeProvider() if keyless else get_provider()
-    router_provider = router_keyless(router_cases) if keyless else provider
-    router = IntentRouter(router_provider, models.models["router"])
-    router_summary = await run_router_eval(router, router_cases)
-
-    from app.prompts.loader import prompt_version
-
-    prompt_versions = {
-        "router": router.prompt_version,
-        "sql_builder": prompt_version("sql_builder"),
-        "sql_summarize": prompt_version("sql_summarize"),
-    }
-    model_versions = {
-        "router": provider.effective_model(models.models["router"]),
-        "sql_builder": provider.effective_model(models.models["sql_builder"]),
-        "grounding": provider.effective_model(models.models["grounding"]),
-        "judge": provider.effective_model(models.models["judge"]),
-    }
-
-    sql_summary: SqlEvalSummary | None = None
-    security_summary: SecuritySummary | None = None
-    answer_summary: AnswerEvalSummary | None = None
-    recall: float | None = None
-
-    if settings.database_url:
-        engine = create_async_engine(settings.database_url)
-        try:
-            sql_builder = SqlBuilder(
-                sql_keyless(sql_cases) if keyless else provider, models.models["sql_builder"]
-            )
-            executor = SqlExecutor(
-                engine,
-                readonly_role=settings.sql_readonly_role,
-                statement_timeout_ms=settings.sql_statement_timeout_ms,
-                max_rows=settings.sql_max_rows,
-            )
-            sql_summary = await run_sql_eval(sql_builder, executor, sql_cases, personas=PERSONAS)
-
-            async def embed(texts: list[str]) -> list[list[float]]:
-                return await provider.embed(models.models["embed"], texts)
-
-            corpus_ready = await _corpus_ready(engine)
-            # Retrieval compares the query embedding with the stored chunk
-            # embeddings, so it is only meaningful when the same provider
-            # embedded the corpus. Keyless runs use canned vectors and would
-            # grade an invalid positive control, so they skip retrieval.
-            retriever = Retriever(engine, embed) if (corpus_ready and not keyless) else None
-            security_summary = await run_security_canaries(
-                router=router, executor=executor, retriever=retriever, engine=engine
-            )
-            if retriever is not None:
-                from app.eval.golden import build_golden_set
-                from app.eval.rag_eval import run_answer_eval, run_retrieval_eval
-
-                golden = build_golden_set()
-                retrieval = await run_retrieval_eval(retriever, golden)
-                recall = retrieval.recall_at_5
-                answer_summary = await run_answer_eval(retriever, provider, models, golden)
-        finally:
+    engine = create_async_engine(settings.database_url) if settings.database_url else None
+    try:
+        run = await run_suites(force_keyless=args.keyless, engine=engine)
+    finally:
+        if engine is not None:
             await engine.dispose()
-    else:
-        security_summary = await run_security_canaries(router=router)
-        logger.warning("DATABASE_URL is not set: skipping SQL and retrieval suites")
-
-    sources = MetricSources(
-        router=router_summary,
-        sql=sql_summary,
-        security=security_summary,
-        recall_at_5=recall,
-        answer_latencies_s=answer_summary.latencies_s if answer_summary else (),
-        first_token_latencies_s=(answer_summary.first_token_latencies_s if answer_summary else ()),
-        costs_usd=answer_summary.costs_usd if answer_summary else (),
-        judge_verdicts=answer_summary.judge_verdicts if answer_summary else (),
-        answers=answer_summary.answers if answer_summary else (),
-    )
-    return sources, prompt_versions, model_versions
+    return to_metric_sources(run), run.prompt_versions, run.model_versions
 
 
 async def _main_async(args: argparse.Namespace) -> int:

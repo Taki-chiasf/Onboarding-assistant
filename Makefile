@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 COMPOSE := docker compose --project-directory . -f infra/docker-compose.yml
 
-.PHONY: help up down obs logs ps seed ingest eval demo-reset \
+.PHONY: help up down obs logs ps seed ingest eval eval-nightly demo-reset \
         install backend-install web-install \
         lint fmt typecheck test test-backend test-web retention pii-scan
 
@@ -33,6 +33,9 @@ ingest: ## Ingest the document corpus into the vector store
 
 eval: ## Run the eval gates against the current database
 	$(COMPOSE) --profile eval run --rm --build eval
+
+eval-nightly: ## Run the nightly eval loop against the current database
+	$(COMPOSE) --profile eval run --rm --build eval-nightly
 
 demo-reset: ## Reset demo data and clear conversation history
 	$(COMPOSE) run --rm db-seed --reset

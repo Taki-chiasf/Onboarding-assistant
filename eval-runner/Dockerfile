@@ -11,6 +11,7 @@ FROM base AS builder
 RUN pip install --no-cache-dir uv
 COPY backend/pyproject.toml backend/uv.lock ./
 COPY backend/app ./app
+COPY backend/scripts ./scripts
 RUN uv sync --frozen --no-dev
 
 
@@ -19,9 +20,10 @@ FROM base AS runtime
 RUN useradd --uid 10001 --create-home appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY backend/app ./app
+COPY backend/scripts ./scripts
 
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER appuser
 
-CMD ["python", "-m", "app.eval.runner"]
+CMD ["python", "-m", "app.eval.nightly"]

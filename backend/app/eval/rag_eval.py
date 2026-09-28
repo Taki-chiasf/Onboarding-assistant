@@ -71,17 +71,26 @@ async def run_retrieval_eval(
     return RetrievalEvalSummary(recall_at_5=rate, total=total, hits=hits, results=results)
 
 
+@dataclass(frozen=True)
+class JudgeVerdict:
+    passed: bool
+    reason: str | None = None
+
+
 async def judge_answer(
     provider: ChatProvider, model: str, query: str, answer: str, context: str
-) -> bool:
+) -> JudgeVerdict:
     prompt = load_prompt("judge")
     user_content = prompt.user.format(context=context, query=query, answer=answer)
     messages = [
         ChatMessage(role="system", content=prompt.system),
         ChatMessage(role="user", content=user_content),
     ]
-    verdict = await provider.chat(model, messages)
-    return verdict.strip().lower().startswith("pass")
+    raw = (await provider.chat(model, messages)).strip()
+    first_line, _, rest = raw.partition("\n")
+    return JudgeVerdict(
+        passed=first_line.strip().lower().startswith("pass"), reason=rest.strip() or None
+    )
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,8 @@ class AnswerCaseResult:
     latency_s: float
     cost_usd: float
     judged_correct: bool
+    judge_reason: str | None = None
+    prompt_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,7 +152,7 @@ async def run_answer_eval(
     results: list[AnswerCaseResult] = []
     for case in cases:
         chunks = await retriever.retrieve(case.prompt, dept=dept, role=role, top_k=top_k)
-        messages, _version = build_grounding_messages(case.prompt, chunks)
+        messages, version = build_grounding_messages(case.prompt, chunks)
         tokens_in = estimate_tokens("".join(message.content for message in messages))
 
         started = perf_counter()
@@ -156,7 +167,7 @@ async def run_answer_eval(
 
         tokens_out = estimate_tokens(answer)
         cost = float(compute_cost(provider.effective_model(grounding_model), tokens_in, tokens_out))
-        judged = await judge_answer(
+        verdict = await judge_answer(
             provider, judge_model, case.prompt, answer, build_context(chunks)
         )
         results.append(
@@ -166,7 +177,9 @@ async def run_answer_eval(
                 first_token_s=first_token_s,
                 latency_s=latency_s,
                 cost_usd=cost,
-                judged_correct=judged,
+                judged_correct=verdict.passed,
+                judge_reason=verdict.reason,
+                prompt_version=version,
             )
         )
     return AnswerEvalSummary(results=results)

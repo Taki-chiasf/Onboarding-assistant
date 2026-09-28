@@ -208,7 +208,8 @@ async def review_queue(
                 .all()
             )
             for row in feedback_rows:
-                feedback_by_message.setdefault(row.message_id, row)
+                if row.message_id is not None:
+                    feedback_by_message.setdefault(row.message_id, row)
             messages = (
                 (await session.execute(select(Message).where(Message.id.in_(message_ids))))
                 .scalars()

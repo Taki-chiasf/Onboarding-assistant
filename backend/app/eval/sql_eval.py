@@ -35,6 +35,10 @@ class SqlCaseResult:
     sql: str | None
     error: str | None
     row_count: int
+    # Which part of the grade failed, for the per-case record.
+    pattern_ok: bool | None = None
+    rows_ok: bool | None = None
+    latency_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -89,7 +93,9 @@ async def run_sql_eval(
                     principal=f"eval@{dept.lower()}.demo.example",
                 )
                 rows = rows_to_dicts(result)
-                case_correct = matches_pattern(case, built.sql) and rows_satisfy(case, rows)
+                pattern_ok = matches_pattern(case, built.sql)
+                rows_ok = rows_satisfy(case, rows)
+                case_correct = pattern_ok and rows_ok
                 valid += 1
                 correct += int(case_correct)
                 results.append(
@@ -102,6 +108,9 @@ async def run_sql_eval(
                         sql=built.sql,
                         error=None,
                         row_count=len(rows),
+                        pattern_ok=pattern_ok,
+                        rows_ok=rows_ok,
+                        latency_ms=result.latency_ms,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - a failing case must not abort the run

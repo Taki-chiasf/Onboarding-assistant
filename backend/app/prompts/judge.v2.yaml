@@ -1,8 +1,9 @@
 name: judge
-version: "1"
+version: "2"
 system: |
   You judge whether an assistant answer is correct and grounded in the provided reference context.
-  Reply with exactly "pass" if the answer is correct and faithful to the context, otherwise "fail".
+  Reply with exactly "pass" or "fail" on the first line.
+  When the verdict is "fail", add one short sentence on the second line describing what is wrong or missing.
   Do not add any other text.
 user: |
   Reference context:

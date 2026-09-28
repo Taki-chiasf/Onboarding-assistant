@@ -196,7 +196,8 @@ async def get_messages(
                 .all()
             )
             for feedback in feedback_rows:
-                feedback_by_message.setdefault(feedback.message_id, feedback)
+                if feedback.message_id is not None:
+                    feedback_by_message.setdefault(feedback.message_id, feedback)
     return [
         {
             "id": str(row.id),

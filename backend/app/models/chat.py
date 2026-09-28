@@ -45,8 +45,11 @@ class Feedback(Base):
     __tablename__ = "feedback"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    message_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE")
+    )
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("eval_cases.id", ondelete="CASCADE")
     )
     rating: Mapped[str] = mapped_column(String(16), nullable=False)
     correction: Mapped[str | None] = mapped_column(Text)
