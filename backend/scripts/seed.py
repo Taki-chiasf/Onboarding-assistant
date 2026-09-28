@@ -260,11 +260,16 @@ _READ_VIEWS: dict[str, str] = {
 
 
 def _dept_setting() -> str:
-    return "current_setting('app.principal_dept', true)"
+    # A pooled connection that once ran a scoped query keeps an empty
+    # session-level value for a custom setting: Postgres reverts the
+    # transaction-local value to the empty string rather than unsetting it.
+    # An empty string must therefore count as "no context" wherever the
+    # setting gates access, or a warm connection would pass the guard.
+    return "NULLIF(current_setting('app.principal_dept', true), '')"
 
 
 def _role_setting() -> str:
-    return "current_setting('app.principal_role', true)"
+    return "NULLIF(current_setting('app.principal_role', true), '')"
 
 
 # Which column on each read view points at a department-owned member, and

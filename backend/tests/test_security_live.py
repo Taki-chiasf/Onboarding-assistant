@@ -56,6 +56,25 @@ async def test_contextless_canaries_all_pass(seeded: None, engine: AsyncEngine) 
     assert all(result.passed for result in results), [r.detail for r in results]
 
 
+async def test_contextless_canaries_hold_on_a_warm_connection(
+    seeded: None, engine: AsyncEngine
+) -> None:
+    """A scoped query leaves an empty session-level department setting on the
+    pooled connection (Postgres reverts the transaction-local value to the
+    empty string instead of unsetting it). A context-less read on that warm
+    connection must still see nothing."""
+    executor = SqlExecutor(engine)
+    await executor.execute(
+        "SELECT count(*) AS n FROM org_members",
+        dept="Engineering",
+        role="employee",
+        principal="warm@example.com",
+    )
+    results = await run_contextless_canaries(engine)
+    assert results
+    assert all(result.passed for result in results), [r.detail for r in results]
+
+
 async def test_rag_acl_canaries_all_pass(seeded: None, engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         count = (await conn.execute(text("SELECT count(*) FROM doc_chunks"))).scalar()

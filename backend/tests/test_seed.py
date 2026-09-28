@@ -114,7 +114,15 @@ def test_select_policy_requires_context_for_unassigned_rows() -> None:
     for table in OWNER_TABLES:
         policy = select_policy(table)
         assert "IS NULL" in policy
-        assert "current_setting('app.principal_dept', true) IS NOT NULL" in policy
+        assert "NULLIF(current_setting('app.principal_dept', true), '') IS NOT NULL" in policy
+
+
+def test_select_policy_treats_an_empty_setting_as_no_context() -> None:
+    """A warm pooled connection keeps an empty-string department setting, which
+    must not count as a context."""
+    for table in OWNER_TABLES + ("org_members",):
+        policy = select_policy(table)
+        assert "current_setting('app.principal_dept', true), '')" in policy
 
 
 def test_select_policy_grants_unassigned_rows_only_with_context() -> None:
@@ -127,8 +135,8 @@ def test_select_policy_grants_unassigned_rows_only_with_context() -> None:
 
 def test_select_policy_for_members_is_department_scoped() -> None:
     assert select_policy("org_members") == (
-        "current_setting('app.principal_role', true) = 'admin' "
-        "OR dept = current_setting('app.principal_dept', true)"
+        "NULLIF(current_setting('app.principal_role', true), '') = 'admin' "
+        "OR dept = NULLIF(current_setting('app.principal_dept', true), '')"
     )
 
 
