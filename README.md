@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Taki-chiasf/Onboarding-assistant-/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Taki-chiasf/Onboarding-assistant-/actions/workflows/ci.yml/badge.svg?style=flat-square"></a>
+  <a href="https://github.com/Taki-chiasf/Onboarding-assistant/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Taki-chiasf/Onboarding-assistant/actions/workflows/ci.yml/badge.svg?style=flat-square"></a>
   <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-111111?style=flat-square&labelColor=f5f5f3">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-async-111111?style=flat-square&labelColor=f5f5f3">
   <img alt="Next.js 15" src="https://img.shields.io/badge/Next.js-15-111111?style=flat-square&labelColor=f5f5f3">
@@ -398,3 +398,7 @@ less in the chat UI than in the seams behind it:
 - **Delivery discipline.** Non-root images with healthchecks, `make up` from a
   clean checkout, Alembic migrations, and CI that gates lint, strict types,
   coverage, a repository PII scan, and all four service images.
+
+## License
+
+MIT — see `LICENSE`.
