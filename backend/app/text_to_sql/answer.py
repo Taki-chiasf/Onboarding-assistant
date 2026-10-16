@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from time import perf_counter
@@ -96,7 +96,7 @@ class SqlAnswerer:
         conversation_id: uuid.UUID | None = None,
         *,
         route: dict[str, Any] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         started = perf_counter()
         logger.info(
             "sql query from %s: %s", principal.email, redact_pii(query, allow=[principal.email])

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import asdict
 from decimal import Decimal
 from time import perf_counter
@@ -63,7 +63,7 @@ class RagAnswerer:
         source_types: Sequence[str] | None = None,
         model_role: str = "grounding",
         route: dict[str, Any] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         started = perf_counter()
         logger.info(
             "chat query from %s: %s", principal.email, redact_pii(query, allow=[principal.email])
@@ -165,9 +165,7 @@ class RagAnswerer:
                     try:
                         served_model = self._provider.effective_model(answer_model)
                         cost = (
-                            compute_cost(
-                                served_model, tokens_in, estimate_tokens(partial)
-                            )
+                            compute_cost(served_model, tokens_in, estimate_tokens(partial))
                             if chunks
                             else Decimal("0")
                         )

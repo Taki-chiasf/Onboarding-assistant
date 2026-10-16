@@ -60,7 +60,6 @@ def _references_forbidden_function(statement: exp.Expression) -> str | None:
     return None
 
 
-
 def validate_query(sql: str) -> str:
     """Return the statement unchanged if it is a single read-only SELECT.
 

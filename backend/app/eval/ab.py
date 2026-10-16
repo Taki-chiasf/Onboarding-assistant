@@ -54,9 +54,7 @@ def decide_sql_challenger(
     if gain + 1e-9 < min_gain:
         return AbDecision(
             adopt=incumbent.model,
-            reason=(
-                f"challenger gained {gain:+.3f} accuracy, below the {min_gain:.2f} bar"
-            ),
+            reason=(f"challenger gained {gain:+.3f} accuracy, below the {min_gain:.2f} bar"),
             gain=gain,
         )
     if challenger.p95_latency_s > incumbent.p95_latency_s:

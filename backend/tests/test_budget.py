@@ -120,9 +120,7 @@ async def test_enforce_budget_rejects_at_the_global_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The caller's own ledger is far under budget; the deployment's is not."""
-    session = _StubSession(
-        [_Rows([(10, Decimal("0.1"))]), _Rows([(600, Decimal("2.0"))])]
-    )
+    session = _StubSession([_Rows([(10, Decimal("0.1"))]), _Rows([(600, Decimal("2.0"))])])
     monkeypatch.setattr(chat_mod, "async_sessionmaker", lambda *a, **k: lambda: session)
     monkeypatch.setenv("DAILY_TOKEN_BUDGET", "100000")
     monkeypatch.setenv("DAILY_GLOBAL_TOKENS", "600")
@@ -143,9 +141,7 @@ async def test_enforce_budget_rejects_at_the_global_cap(
 async def test_enforce_budget_allows_under_both_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = _StubSession(
-        [_Rows([(10, Decimal("0.1"))]), _Rows([(100, Decimal("0.5"))])]
-    )
+    session = _StubSession([_Rows([(10, Decimal("0.1"))]), _Rows([(100, Decimal("0.5"))])])
     monkeypatch.setattr(chat_mod, "async_sessionmaker", lambda *a, **k: lambda: session)
     monkeypatch.setenv("DAILY_TOKEN_BUDGET", "100000")
     monkeypatch.setenv("DAILY_GLOBAL_TOKENS", "600")

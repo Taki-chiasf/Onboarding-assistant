@@ -1,4 +1,7 @@
+from typing import Any, cast
+
 from app.llm.fake import FakeProvider
+from app.llm.provider import ChatMessage, ChatProvider
 from app.router.router import IntentRouter
 from app.router.schema import Intent
 
@@ -39,7 +42,9 @@ async def test_decide_falls_back_to_docs_on_invalid_verdict() -> None:
 
 
 class _ExplodingProvider:
-    async def chat_structured(self, model: str, messages: list, schema: dict) -> str:
+    async def chat_structured(
+        self, model: str, messages: list[ChatMessage], schema: dict[str, Any]
+    ) -> str:
         raise RuntimeError("model unreachable")
 
     def effective_model(self, model: str) -> str:
@@ -47,7 +52,7 @@ class _ExplodingProvider:
 
 
 async def test_decide_falls_back_to_docs_when_router_model_unreachable() -> None:
-    router = IntentRouter(_ExplodingProvider(), "fake-router")
+    router = IntentRouter(cast(ChatProvider, _ExplodingProvider()), "fake-router")
 
     decision = await router.decide("Where is the onboarding checklist?")
 
@@ -56,7 +61,7 @@ async def test_decide_falls_back_to_docs_when_router_model_unreachable() -> None
 
 
 async def test_router_model_failure_still_honors_the_keyword_bridge() -> None:
-    router = IntentRouter(_ExplodingProvider(), "fake-router")
+    router = IntentRouter(cast(ChatProvider, _ExplodingProvider()), "fake-router")
 
     decision = await router.decide("How many projects are active?")
 

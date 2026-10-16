@@ -36,9 +36,7 @@ def load_passages() -> list[str]:
     passages: list[str] = []
     for category, docs in CATEGORIES.items():
         for filename, content in docs:
-            chunks = chunk_markdown(
-                f"file:{category}/{filename}", category, content, ["dept:all"]
-            )
+            chunks = chunk_markdown(f"file:{category}/{filename}", category, content, ["dept:all"])
             passages.extend(chunk.content for chunk in chunks)
     return passages
 

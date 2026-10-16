@@ -21,9 +21,7 @@ from app.llm.resolver import ModelResolver, is_model_unavailable, is_transient_t
 TIER_403 = "not available in your subscription tier"
 
 
-def _fast_retry(
-    monkeypatch: pytest.MonkeyPatch, attempts: int = 4
-) -> list[float]:
+def _fast_retry(monkeypatch: pytest.MonkeyPatch, attempts: int = 4) -> list[float]:
     """Shrink the retry backoff and record the delays instead of really sleeping."""
     recorded: list[float] = []
 

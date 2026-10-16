@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 BUDGET_LIMIT_MESSAGE = "Daily budget reached for your account — resets at 00:00 UTC."
 
 GLOBAL_BUDGET_LIMIT_MESSAGE = (
-    "The assistant is at capacity today — its shared allowance is spent. "
-    "Try again after 00:00 UTC."
+    "The assistant is at capacity today — its shared allowance is spent. Try again after 00:00 UTC."
 )
 
 _counter: Counter | None = None

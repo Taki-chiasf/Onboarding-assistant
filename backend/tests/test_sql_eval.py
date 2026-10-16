@@ -80,9 +80,7 @@ class _FakeExecutor:
 async def test_run_sql_eval_grades_valid_and_correct() -> None:
     builder = _FakeBuilder("SELECT count(*) FROM tickets WHERE status = 'open'")
     executor = _FakeExecutor(["count"], [(3,)])
-    case = _case(
-        expected_rows_predicate=lambda rows: len(rows) == 1 and int(rows[0]["count"]) >= 0
-    )
+    case = _case(expected_rows_predicate=lambda rows: len(rows) == 1 and int(rows[0]["count"]) >= 0)
 
     summary = await run_sql_eval(
         cast(SqlBuilder, builder),

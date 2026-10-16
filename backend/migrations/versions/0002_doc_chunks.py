@@ -55,12 +55,9 @@ def upgrade() -> None:
         "CREATE INDEX ix_doc_chunks_embedding_hnsw ON doc_chunks "
         "USING hnsw (embedding vector_cosine_ops)"
     )
+    op.execute("CREATE INDEX ix_doc_chunks_search_vector ON doc_chunks USING GIN (search_vector)")
     op.execute(
-        "CREATE INDEX ix_doc_chunks_search_vector ON doc_chunks USING GIN (search_vector)"
-    )
-    op.execute(
-        "CREATE INDEX ix_doc_chunks_content_trgm ON doc_chunks "
-        "USING GIN (content gin_trgm_ops)"
+        "CREATE INDEX ix_doc_chunks_content_trgm ON doc_chunks USING GIN (content gin_trgm_ops)"
     )
 
 

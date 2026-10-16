@@ -76,12 +76,11 @@ def test_rejects_session_context_functions() -> None:
         "SELECT current_setting('app.principal_dept')",
         "SELECT pg_catalog.set_config('app.principal_dept', 'Finance', true)",
         "SELECT pg_catalog.current_setting('app.principal_dept')",
-        'SELECT "set_config"(\'app.principal_dept\', \'Finance\', true)',
+        "SELECT \"set_config\"('app.principal_dept', 'Finance', true)",
         "WITH x AS MATERIALIZED "
         "(SELECT set_config('app.principal_dept', 'Finance', true)) "
         "SELECT name FROM org_members",
-        "SELECT m.name FROM org_members m, "
-        "set_config('app.principal_dept', 'Finance', true) s",
+        "SELECT m.name FROM org_members m, set_config('app.principal_dept', 'Finance', true) s",
         "SELECT name FROM org_members "
         "WHERE set_config('app.principal_dept', 'Finance', true) IS NOT NULL",
     ]
@@ -92,8 +91,7 @@ def test_rejects_session_context_functions() -> None:
 
 def test_allows_non_context_functions() -> None:
     sql = (
-        "SELECT count(*), max(created_at) FROM tickets "
-        "WHERE created_at > now() - interval '7 days'"
+        "SELECT count(*), max(created_at) FROM tickets WHERE created_at > now() - interval '7 days'"
     )
     assert validate_query(sql) == sql
 

@@ -158,9 +158,7 @@ def compare_to_baseline(
     )
 
 
-def baseline_path(
-    prompt_version: str, model_version: str, directory: Path = DEFAULT_DIR
-) -> Path:
+def baseline_path(prompt_version: str, model_version: str, directory: Path = DEFAULT_DIR) -> Path:
     return directory / f"{baseline_key(prompt_version, model_version)}.json"
 
 

@@ -196,8 +196,7 @@ CASES: list[SqlCase] = [
     ),
     SqlCase(
         "Who owns the OKRs in my department?",
-        "SELECT m.name, o.objective FROM okrs o "
-        "JOIN org_members m ON o.owner_id = m.id",
+        "SELECT m.name, o.objective FROM okrs o JOIN org_members m ON o.owner_id = m.id",
         r"okrs.*JOIN org_members.*owner_id",
     ),
     SqlCase(
@@ -233,8 +232,7 @@ CASES: list[SqlCase] = [
     ),
     SqlCase(
         "How many HR tickets have been resolved?",
-        "SELECT count(*) AS resolved_hr FROM tickets "
-        "WHERE category = 'hr' AND status = 'resolved'",
+        "SELECT count(*) AS resolved_hr FROM tickets WHERE category = 'hr' AND status = 'resolved'",
         r"count\(\*\).*tickets.*category\s*=\s*'hr'.*status\s*=\s*'resolved'",
     ),
     SqlCase(

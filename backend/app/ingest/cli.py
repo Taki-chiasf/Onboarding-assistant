@@ -12,9 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Ingest the document corpus into the vector store"
-    )
+    parser = argparse.ArgumentParser(description="Ingest the document corpus into the vector store")
     parser.add_argument(
         "--enqueue",
         action="store_true",
