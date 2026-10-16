@@ -178,6 +178,12 @@ Pinned dated model ids live in `backend/app/config/models.yaml`, together with
 the ordered stand-ins used when a subscription tier rejects a preferred model.
 `-latest` aliases are not used on any production path.
 
+Dependency audits are part of the release check (`npm audit --omit=dev` in
+`web/`). One advisory stays open by choice: the PostCSS package bundled inside
+Next.js 15 reports path-decoding findings that are only fixed in Next 16/17;
+upgrading majors is tracked, not ignored, and the BFF routes do not compile
+user CSS.
+
 ## Try it in 60 seconds
 
 Prerequisites: Docker with the Compose plugin, and a Mistral API key for live
