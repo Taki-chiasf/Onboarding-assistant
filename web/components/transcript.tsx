@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -65,10 +65,10 @@ export type ChatMessage = {
   uid?: string;
 };
 
-const STOP_NOTICES: Record<Exclude<ChatMessage["stopReason"], undefined>, string> = {
+const STOP_NOTICES = {
   user: "Generation stopped",
   connection: "Connection lost — the answer may be cut off",
-};
+} as const;
 
 function stripCitations(content: string): string {
   return content.replace(/\[\d+\](?!\()/g, "");
@@ -311,6 +311,92 @@ export function AnswerFeedback({
   );
 }
 
+/**
+ * One finalized turn. Every prop is stable across streaming (the message
+ * object, and reply callbacks from Chat), so a memoized row re-renders only
+ * when its own content changes — the draft row above it re-parses markdown
+ * per token; completed turns must not.
+ */
+const MessageBlock = memo(function MessageBlock({
+  message,
+  clarifyDisabled,
+  onClarify,
+  onFeedback,
+}: {
+  message: ChatMessage;
+  clarifyDisabled: boolean;
+  onClarify: (query: string, surface: Surface) => void;
+  onFeedback: (messageId: string, rating: "up" | "down", correction?: string) => void;
+}) {
+  return (
+    <>
+      {message.role === "user" ? (
+        <div className="flex justify-end">
+          <div className="max-w-[85%] rounded-2xl bg-secondary px-4 py-2.5 text-[16px] leading-relaxed">
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[16px] leading-relaxed">
+          {message.content ? (
+            <div className="prose prose-neutral max-w-none whitespace-pre-wrap prose-headings:font-semibold prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-muted prose-pre:p-3 prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-a:text-brand-vermilion prose-a:underline prose-a:underline-offset-2">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {stripCitations(message.content)}
+              </ReactMarkdown>
+            </div>
+          ) : message.stopReason ? (
+            <p className="text-sm text-muted-foreground">{STOP_NOTICES[message.stopReason]}</p>
+          ) : (
+            <PixelCursor />
+          )}
+          {message.stopReason && message.content && (
+            <p className="mt-1.5 font-mono text-[11px] tracking-[0.04em] text-muted-foreground">
+              {STOP_NOTICES[message.stopReason]}
+            </p>
+          )}
+          {message.clarify && message.query && (
+            <motion.div
+              initial="hidden"
+              animate="visible"
+              variants={stagger}
+              className="mt-3 flex flex-wrap gap-2"
+            >
+              {message.clarify.options.map((option) => (
+                <motion.div key={option.surface} variants={riseIn}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={clarifyDisabled}
+                    onClick={() => onClarify(message.query ?? "", option.surface)}
+                  >
+                    {option.label}
+                  </Button>
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+          {((message.sources && message.sources.length > 0) || message.sql) && (
+            <SourcePanel
+              sources={message.sources ?? []}
+              sql={message.sql}
+              traceId={message.traceId}
+            />
+          )}
+          {message.messageId && (
+            <AnswerFeedback
+              messageId={message.messageId}
+              rating={message.feedback}
+              correction={message.correction}
+              onFeedback={onFeedback}
+            />
+          )}
+        </div>
+      )}
+    </>
+  );
+});
+
 export function Transcript({
   messages,
   busy,
@@ -324,83 +410,21 @@ export function Transcript({
 }) {
   return (
     <div className="space-y-6">
-      {messages.map((message) =>
-        message.role === "user" ? (
-          <motion.div
-            key={message.uid ?? `u-${message.content}`}
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ type: "spring", stiffness: 380, damping: 30 }}
-            className="flex justify-end"
-          >
-            <div className="max-w-[85%] rounded-2xl bg-secondary px-4 py-2.5 text-[16px] leading-relaxed">
-              <p className="whitespace-pre-wrap">{message.content}</p>
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key={message.uid ?? `a-${message.content}`}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={transition}
-            className="text-[16px] leading-relaxed"
-          >
-            {message.content ? (
-              <div className="prose prose-neutral max-w-none whitespace-pre-wrap prose-headings:font-semibold prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-muted prose-pre:p-3 prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-a:text-brand-vermilion prose-a:underline prose-a:underline-offset-2">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {stripCitations(message.content)}
-                </ReactMarkdown>
-              </div>
-            ) : message.stopReason ? (
-              <p className="text-sm text-muted-foreground">{STOP_NOTICES[message.stopReason]}</p>
-            ) : (
-              <PixelCursor />
-            )}
-            {message.stopReason && message.content && (
-              <p className="mt-1.5 font-mono text-[11px] tracking-[0.04em] text-muted-foreground">
-                {STOP_NOTICES[message.stopReason]}
-              </p>
-            )}
-            {message.clarify && message.query && (
-              <motion.div
-                initial="hidden"
-                animate="visible"
-                variants={stagger}
-                className="mt-3 flex flex-wrap gap-2"
-              >
-                {message.clarify.options.map((option) => (
-                  <motion.div key={option.surface} variants={riseIn}>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => onClarify(message.query ?? "", option.surface)}
-                    >
-                      {option.label}
-                    </Button>
-                  </motion.div>
-                ))}
-              </motion.div>
-            )}
-            {((message.sources && message.sources.length > 0) || message.sql) && (
-              <SourcePanel
-                sources={message.sources ?? []}
-                sql={message.sql}
-                traceId={message.traceId}
-              />
-            )}
-            {message.messageId && (
-              <AnswerFeedback
-                messageId={message.messageId}
-                rating={message.feedback}
-                correction={message.correction}
-                onFeedback={onFeedback}
-              />
-            )}
-          </motion.div>
-        )
-      )}
+      {messages.map((message, index) => (
+        <motion.div
+          key={message.uid ?? `${message.role}-${index}-${message.content.slice(0, 12)}`}
+          initial={{ opacity: 0, y: message.role === "user" ? 12 : 8, scale: message.role === "user" ? 0.98 : 1 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={message.role === "user" ? { type: "spring", stiffness: 380, damping: 30 } : transition}
+        >
+          <MessageBlock
+            message={message}
+            clarifyDisabled={message.clarify ? busy : false}
+            onClarify={onClarify}
+            onFeedback={onFeedback}
+          />
+        </motion.div>
+      ))}
     </div>
   );
 }

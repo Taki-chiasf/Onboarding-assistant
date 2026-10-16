@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowUp, Gauge, Plus, Square, Trash2 } from "lucide-react";
 
 import { LogoutButton } from "@/components/logout-button";
-import { PixelMark } from "@/components/pixel-mark";
+import { PixelCursor, PixelMark } from "@/components/pixel-mark";
 import { Transcript } from "@/components/transcript";
 import type { ChatMessage, Source, SqlDetail, Surface } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
@@ -105,8 +105,13 @@ export function Chat({ principal }: { principal: Principal }) {
   /* A send that failed before the stream started reads as an actionable error
      just above the composer, with a retry affordance. */
   const [sendError, setSendError] = useState<string | null>(null);
+  /* History loading and its error state, with a request sequence so a fast
+     second click cannot race an older response into the transcript. */
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyDetailError, setHistoryDetailError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
+  const historySeq = useRef(0);
   /* The in-flight turn's controller, for the Stop affordance. */
   const abortRef = useRef<AbortController | null>(null);
   /* Authoritative draft mirror: the streaming loop is the only writer, so
@@ -115,6 +120,20 @@ export function Chat({ principal }: { principal: Principal }) {
   const draftRef = useRef<ChatMessage | null>(null);
   /* Last query the user tried to send, for the retry affordance. */
   const lastQueryRef = useRef<string>("");
+  /* Autoscroll sticks to the bottom while the user is near it; scrolling up
+     pauses the catch-up and offers a jump back instead. */
+  const stickToBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  /* Reply callbacks the memoized rows hold onto, so streaming never re-renders
+     completed turns. */
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const sendRef = useRef<(pinned?: { query: string; surface?: Surface }) => Promise<void>>(
+    undefined
+  );
+  /* Token batching: accumulate the draft's incoming text and hand it to React
+     once per frame instead of once per event. */
+  const pendingTokensRef = useRef("");
+  const tokenFrameRef = useRef<number | null>(null);
   /* View key drives the switch animation and only changes on explicit
      navigation, never when the backend assigns a new conversation id
      mid-stream. */
@@ -125,6 +144,12 @@ export function Chat({ principal }: { principal: Principal }) {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
+    if (stickToBottom.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    }
+  }, [messages, draft]);
+
+  useEffect(() => {
     fetch("/api/conversations")
       .then((res) => (res.ok ? res.json() : []))
       .then(setConversations)
@@ -132,8 +157,9 @@ export function Chat({ principal }: { principal: Principal }) {
   }, []);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, draft]);
+    messagesRef.current = messages;
+    sendRef.current = send;
+  });
 
   function refreshConversations() {
     fetch("/api/conversations")
@@ -142,43 +168,89 @@ export function Chat({ principal }: { principal: Principal }) {
       .catch(() => undefined);
   }
 
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const stuck = distance < 96;
+    stickToBottom.current = stuck;
+    setShowJump(!stuck);
+  };
+
+  function jumpToLatest() {
+    stickToBottom.current = true;
+    setShowJump(false);
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }
+
+  function flushTokens() {
+    const pending = pendingTokensRef.current;
+    if (!pending) return;
+    pendingTokensRef.current = "";
+    tokenFrameRef.current = null;
+    applyAssistant((m) => ({ ...m, content: m.content + pending }));
+  }
+
+  function cancelTokenFlush() {
+    pendingTokensRef.current = "";
+    if (tokenFrameRef.current !== null) {
+      window.cancelAnimationFrame(tokenFrameRef.current);
+      tokenFrameRef.current = null;
+    }
+  }
+
   async function openConversation(id: string) {
+    setHistoryError(null);
+    setHistoryDetailError(null);
+    setHistoryLoading(true);
+    const requestSeq = ++historySeq.current;
     setConversationId(id);
     setViewKey(id);
-    setDraft(null);
-    const res = await fetch(`/api/conversations/${id}/messages`);
-    if (!res.ok) return;
-    const history = (await res.json()) as {
-      id: string;
-      role: "user" | "assistant";
-      content: string;
-      trace_id?: string | null;
-      detail?: { sources?: Source[]; sql?: SqlDetail } | null;
-      feedback?: { rating?: string | null; correction?: string | null } | null;
-    }[];
-    setMessages(
-      history.map((m) => ({
-        role: m.role,
-        content: m.content,
-        sources: m.detail?.sources,
-        sql: m.detail?.sql,
-        traceId: m.trace_id ?? undefined,
-        uid: m.id,
-        messageId: m.id,
-        feedback:
-          m.feedback?.rating === "up" || m.feedback?.rating === "down"
-            ? m.feedback.rating
-            : undefined,
-        correction: m.feedback?.correction ?? undefined,
-      }))
-    );
+    setDraftSync(null);
+    /* Blank immediately: the previous transcript must never masquerade as
+       another conversation's history while it loads. */
+    setMessages([]);
+    try {
+      const res = await fetch(`/api/conversations/${id}/messages`);
+      if (!res.ok) throw new Error("load failed");
+      const history = (await res.json()) as {
+        id: string;
+        role: "user" | "assistant";
+        content: string;
+        trace_id?: string | null;
+        detail?: { sources?: Source[]; sql?: SqlDetail } | null;
+        feedback?: { rating?: string | null; correction?: string | null } | null;
+      }[];
+      if (requestSeq !== historySeq.current) return;
+      setMessages(
+        history.map((m) => ({
+          role: m.role,
+          content: m.content,
+          sources: m.detail?.sources,
+          sql: m.detail?.sql,
+          traceId: m.trace_id ?? undefined,
+          uid: m.id,
+          messageId: m.id,
+          feedback:
+            m.feedback?.rating === "up" || m.feedback?.rating === "down"
+              ? m.feedback.rating
+              : undefined,
+          correction: m.feedback?.correction ?? undefined,
+        }))
+      );
+    } catch {
+      if (requestSeq !== historySeq.current) return;
+      setHistoryDetailError("That conversation could not be loaded. Try again.");
+    } finally {
+      if (requestSeq === historySeq.current) setHistoryLoading(false);
+    }
   }
 
   function newConversation() {
     setConversationId(null);
     setViewKey("new");
     setMessages([]);
-    setDraft(null);
+    setDraftSync(null);
   }
 
   async function deleteConversation(id: string) {
@@ -239,34 +311,44 @@ export function Chat({ principal }: { principal: Principal }) {
     }
   }
 
-  async function submitFeedback(
-    messageId: string,
-    rating: "up" | "down",
-    correction?: string
-  ) {
-    const current =
-      messages.find((message) => message.messageId === messageId) ??
-      (draft?.messageId === messageId ? draft : undefined);
-    const previousRating = current?.feedback;
-    const previousCorrection = current?.correction;
-    updateMessage(messageId, {
-      feedback: rating,
-      correction: correction ?? previousCorrection,
-    });
-    try {
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message_id: messageId, rating, correction }),
-      });
-      if (!res.ok) throw new Error("feedback request failed");
-    } catch {
+  const submitFeedback = useCallback(
+    async (messageId: string, rating: "up" | "down", correction?: string) => {
+      const current =
+        messagesRef.current.find((message) => message.messageId === messageId) ??
+        (draftRef.current?.messageId === messageId ? draftRef.current : undefined);
+      const previousRating = current?.feedback;
+      const previousCorrection = current?.correction;
       updateMessage(messageId, {
-        feedback: previousRating,
-        correction: previousCorrection,
+        feedback: rating,
+        correction: correction ?? previousCorrection,
       });
-    }
-  }
+      try {
+        const res = await fetch("/api/feedback", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message_id: messageId, rating, correction }),
+        });
+        if (!res.ok) throw new Error("feedback request failed");
+      } catch {
+        updateMessage(messageId, {
+          feedback: previousRating,
+          correction: previousCorrection,
+        });
+      }
+    },
+    []
+  );
+
+  const onClarifySelect = useCallback((query: string, surface: Surface) => {
+    void sendRef.current?.({ query, surface });
+  }, []);
+
+  const onFeedbackSubmit = useCallback(
+    (messageId: string, rating: "up" | "down", correction?: string) => {
+      void submitFeedback(messageId, rating, correction);
+    },
+    [submitFeedback]
+  );
 
   async function send(pinned?: { query: string; surface?: Surface }) {
     const query = (pinned?.query ?? input).trim();
@@ -345,15 +427,23 @@ export function Chat({ principal }: { principal: Principal }) {
         } else if (event === "clarify") {
           applyAssistant((m) => ({ ...m, clarify: data as unknown as ChatMessage["clarify"] }));
         } else if (event === "token") {
-          applyAssistant((m) => ({ ...m, content: m.content + String(data.text ?? "") }));
+          pendingTokensRef.current += String(data.text ?? "");
+          if (tokenFrameRef.current === null) {
+            tokenFrameRef.current = window.requestAnimationFrame(() => {
+              tokenFrameRef.current = null;
+              flushTokens();
+            });
+          }
         } else if (event === "limit" || event === "error") {
           terminalSeen = true;
+          cancelTokenFlush();
           applyAssistant((m) => ({
             ...m,
             content: String(data.message ?? "Something went wrong."),
           }));
         } else if (event === "done") {
           terminalSeen = true;
+          cancelTokenFlush();
           applyAssistant((m) => ({
             ...m,
             content: String(data.answer ?? m.content),
@@ -373,6 +463,7 @@ export function Chat({ principal }: { principal: Principal }) {
       const userStopped =
         streamError instanceof Error && streamError.name === "AbortError";
       if (userStopped) {
+        flushTokens(); // text that arrived since the last frame is still real
         applyAssistant((m) => ({ ...m, stopReason: "user" }));
       } else if (!terminalSeen) {
         failure("Could not reach the assistant. Your message was not sent.");
@@ -380,6 +471,7 @@ export function Chat({ principal }: { principal: Principal }) {
         applyAssistant((m) => ({ ...m, content: m.content || "Something went wrong." }));
       }
     } finally {
+      cancelTokenFlush();
       /* Exactly one pure append per turn: the draft snapshot comes from the
          ref, never from inside a setState updater. */
       const finalDraft = draftRef.current;
@@ -569,7 +661,7 @@ export function Chat({ principal }: { principal: Principal }) {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div ref={scrollRef} onScroll={onScroll} className="relative flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-4xl px-4 py-8 md:px-6">
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div
@@ -579,8 +671,27 @@ export function Chat({ principal }: { principal: Principal }) {
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.18, ease: EASE }}
                 >
+                  {historyDetailError && (
+                    <div className="mx-auto flex items-center justify-between gap-3 py-2">
+                      <p className="text-sm text-destructive">{historyDetailError}</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => conversationId && void openConversation(conversationId)}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  )}
+                  {historyLoading && (
+                    <div className="flex items-center gap-3 py-3 text-sm text-muted-foreground">
+                      <PixelCursor />
+                      <span>Loading conversation…</span>
+                    </div>
+                  )}
                   <AnimatePresence mode="wait" initial={false}>
-                    {visible.length === 0 ? (
+                    {visible.length === 0 && !historyLoading && !historyDetailError ? (
                       <motion.div
                         key="empty"
                         exit={{ opacity: 0, y: -10, transition: { duration: 0.18, ease: EASE } }}
@@ -592,10 +703,8 @@ export function Chat({ principal }: { principal: Principal }) {
                         <Transcript
                           messages={visible}
                           busy={busy}
-                          onClarify={(query, surface) => void send({ query, surface })}
-                          onFeedback={(messageId, rating, correction) =>
-                            void submitFeedback(messageId, rating, correction)
-                          }
+                          onClarify={onClarifySelect}
+                          onFeedback={onFeedbackSubmit}
                         />
                       </motion.div>
                     )}
@@ -603,6 +712,22 @@ export function Chat({ principal }: { principal: Principal }) {
                 </motion.div>
               </AnimatePresence>
             </div>
+            <AnimatePresence>
+              {showJump && (
+                <motion.button
+                  key="jump"
+                  type="button"
+                  onClick={jumpToLatest}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.15, ease: EASE }}
+                  className="absolute inset-x-4 bottom-3 mx-auto w-fit rounded-full border bg-background/95 px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground shadow-lift backdrop-blur transition-colors hover:text-foreground md:inset-x-6"
+                >
+                  Jump to latest
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
 
           {sendError && (
