@@ -64,6 +64,7 @@ RouteSource = Literal[
     "surface_disambiguation",
     "interpretation_disambiguation",
     "parse_fallback",
+    "provider_fallback",
     "pinned",
 ]
 

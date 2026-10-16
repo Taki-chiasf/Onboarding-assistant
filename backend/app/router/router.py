@@ -12,7 +12,7 @@ import logging
 
 from app.llm.provider import ChatMessage, ChatProvider
 from app.prompts.loader import load_prompt, prompt_version
-from app.router.guardrails import resolve_verdict
+from app.router.guardrails import SURFACE_BY_INTENT, keyword_override, resolve_verdict
 from app.router.schema import Intent, RouteDecision, RouterVerdict, Surface, verdict_json_schema
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,13 @@ class IntentRouter:
         except ValueError:
             logger.warning("router verdict failed to parse; falling back to document retrieval")
             return _parse_fallback()
+        except Exception:
+            # A transport, throttle, or availability failure must degrade the
+            # way a parse failure does instead of failing the whole turn. The
+            # deterministic keyword bridge still applies so an obvious question
+            # keeps its surface during an outage.
+            logger.exception("router model unavailable; falling back to a safe surface")
+            return _provider_fallback(query)
         return resolve_verdict(query, verdict)
 
 
@@ -49,4 +56,25 @@ def _parse_fallback() -> RouteDecision:
         entities=[],
         rationale="router output could not be parsed",
         source="parse_fallback",
+    )
+
+
+def _provider_fallback(query: str) -> RouteDecision:
+    intent = keyword_override(query)
+    if intent is None:
+        return RouteDecision(
+            intent=Intent.RAG_DOCS,
+            confidence=0.0,
+            surfaces=[Surface.RAG_DOCS],
+            entities=[],
+            rationale="router model unavailable",
+            source="provider_fallback",
+        )
+    return RouteDecision(
+        intent=intent,
+        confidence=0.0,
+        surfaces=[SURFACE_BY_INTENT[intent]],
+        entities=[],
+        rationale="router model unavailable; keyword bridge applied",
+        source="provider_fallback",
     )
