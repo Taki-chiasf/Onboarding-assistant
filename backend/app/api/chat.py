@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -138,6 +139,13 @@ def _sse(event: str, data: object) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+KEEPALIVE_FRAME = ": keepalive\n\n"
+
+STREAM_FAILURE_DATA: dict[str, str] = {
+    "message": "Something went wrong handling that request. Please try again."
+}
+
+
 @router.post("/chat")
 async def chat(
     payload: ChatRequest,
@@ -150,23 +158,72 @@ async def chat(
         if not budget.allowed:
             yield _sse("limit", {"message": budget.message})
             return
+
+        keepalive_s = get_settings().sse_keepalive_s
         try:
-            async for event in orchestrator.stream(
-                payload.query, principal, payload.conversation_id, surface=payload.surface
-            ):
-                yield _sse(str(event["event"]), event["data"])
+            if keepalive_s <= 0:
+                async for event in orchestrator.stream(
+                    payload.query, principal, payload.conversation_id, surface=payload.surface
+                ):
+                    yield _sse(str(event["event"]), event["data"])
+            else:
+                async for frame in _forward_with_keepalive(
+                    orchestrator, payload, principal, keepalive_s
+                ):
+                    yield frame
         except Exception:
             # The response has already started by the time a router, builder, or
             # executor failure surfaces, so the status code cannot change. Send a
             # terminal error event instead of dropping the connection, which
             # otherwise looks identical to an empty answer to the client.
             logger.exception("chat stream failed")
-            yield _sse(
-                "error",
-                {"message": "Something went wrong handling that request. Please try again."},
-            )
+            yield _sse("error", STREAM_FAILURE_DATA)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+async def _forward_with_keepalive(
+    orchestrator: ChatDispatcher,
+    payload: ChatRequest,
+    principal: Principal,
+    keepalive_s: float,
+) -> AsyncIterator[str]:
+    """Relay orchestrator events behind a trickle of keepalive pings.
+
+    The orchestrator's generator (and the database work inside it) runs in a
+    producer task so this loop can emit an SSE comment frame whenever the model
+    goes quiet, keeping proxies and gateways from buffering or timing out a
+    healthy stream. A consumer disconnect (GeneratorExit) cancels the producer,
+    which lets the answer path record what was generated so far.
+    """
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    producer_done = asyncio.Event()
+
+    async def produce() -> None:
+        try:
+            async for event in orchestrator.stream(
+                payload.query, principal, payload.conversation_id, surface=payload.surface
+            ):
+                queue.put_nowait((str(event["event"]), event["data"]))
+        except Exception:
+            queue.put_nowait(("error", STREAM_FAILURE_DATA))
+        finally:
+            producer_done.set()
+
+    producer = asyncio.create_task(produce())
+    try:
+        while True:
+            if producer_done.is_set() and queue.empty():
+                return
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=keepalive_s)
+            except TimeoutError:
+                yield KEEPALIVE_FRAME
+                continue
+            yield _sse(event[0], event[1])
+    finally:
+        if not producer.done():
+            producer.cancel()
 
 
 def _session_factory(request: Request) -> async_sessionmaker[AsyncSession]:

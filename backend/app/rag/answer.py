@@ -32,7 +32,7 @@ from app.models import Message
 from app.prompts.loader import prompt_version
 from app.rag.cost import record_cost
 from app.rag.grounding import CITE_OR_DIE, Source, build_grounding_messages, to_sources
-from app.rag.retrieval import Retriever
+from app.rag.retrieval import RetrievedChunk, Retriever
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -79,75 +79,116 @@ class RagAnswerer:
 
             conv_id = await self._record_user_message(query, principal, trace_id, conversation_id)
 
-            with tracer.start_as_current_span("retrieve"):
-                chunks = await self._retriever.retrieve(
-                    query, dept=principal.dept, role=principal.role, source_types=source_types
-                )
-
-            sources = to_sources(chunks)
-            yield {
-                "event": "sources",
-                "data": {
-                    "conversation_id": str(conv_id),
-                    "sources": [asdict(s) for s in sources],
-                },
-            }
-
+            # Streaming state for the disconnect path: whatever was emitted before
+            # the generator is closed still gets recorded and billed in full.
+            emitted: list[str] = []
+            chunks: list[RetrievedChunk] = []
+            sources: list[Source] = []
             answer_model = self._models.models[model_role]
+            version = prompt_version(GROUNDING_PROMPT)
+            tokens_in = 0
+            finalized = False
+            try:
+                with tracer.start_as_current_span("retrieve"):
+                    chunks = await self._retriever.retrieve(
+                        query, dept=principal.dept, role=principal.role, source_types=source_types
+                    )
 
-            if not chunks:
-                answer = CITE_OR_DIE
-                version = prompt_version(GROUNDING_PROMPT)
-                tokens_in = 0
-                yield {"event": "token", "data": {"text": answer}}
-            else:
-                messages, version = build_grounding_messages(query, chunks)
-                tokens_in = estimate_tokens("".join(m.content for m in messages))
-                parts: list[str] = []
-                with tracer.start_as_current_span("ground"):
-                    async for token in self._provider.stream(answer_model, messages):
-                        parts.append(token)
-                        yield {"event": "token", "data": {"text": token}}
-                answer = "".join(parts)
+                sources = to_sources(chunks)
+                yield {
+                    "event": "sources",
+                    "data": {
+                        "conversation_id": str(conv_id),
+                        "sources": [asdict(s) for s in sources],
+                    },
+                }
 
-            latency_ms = int((perf_counter() - started) * 1000)
-            tokens_out = estimate_tokens(answer)
-            served_model = self._provider.effective_model(answer_model)
-            cost: Decimal = (
-                compute_cost(served_model, tokens_in, tokens_out) if chunks else Decimal("0")
-            )
-            message_id = await self._record_answer(
-                conv_id,
-                principal,
-                answer,
-                served_model,
-                version,
-                trace_id,
-                latency_ms,
-                tokens_in,
-                tokens_out,
-                cost,
-                sources,
-                route,
-            )
+                if not chunks:
+                    answer = CITE_OR_DIE
+                    emitted.append(answer)
+                    yield {"event": "token", "data": {"text": answer}}
+                else:
+                    messages, version = build_grounding_messages(query, chunks)
+                    tokens_in = estimate_tokens("".join(m.content for m in messages))
+                    with tracer.start_as_current_span("ground"):
+                        async for token in self._provider.stream(answer_model, messages):
+                            emitted.append(token)
+                            yield {"event": "token", "data": {"text": token}}
+                    answer = "".join(emitted)
 
-            span.set_attribute("answer.cited_sources", len(chunks))
-            yield {
-                "event": "done",
-                "data": {
-                    "conversation_id": str(conv_id),
-                    "message_id": str(message_id),
-                    "answer": answer,
-                    "sources": [asdict(s) for s in sources],
-                    "trace_id": trace_id,
-                    "model": served_model,
-                    "prompt_version": version,
-                    "latency_ms": latency_ms,
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                    "cost_usd": str(cost),
-                },
-            }
+                latency_ms = int((perf_counter() - started) * 1000)
+                tokens_out = estimate_tokens(answer)
+                served_model = self._provider.effective_model(answer_model)
+                cost: Decimal = (
+                    compute_cost(served_model, tokens_in, tokens_out) if chunks else Decimal("0")
+                )
+                message_id = await self._record_answer(
+                    conv_id,
+                    principal,
+                    answer,
+                    served_model,
+                    version,
+                    trace_id,
+                    latency_ms,
+                    tokens_in,
+                    tokens_out,
+                    cost,
+                    sources,
+                    route,
+                )
+                finalized = True
+
+                span.set_attribute("answer.cited_sources", len(chunks))
+                yield {
+                    "event": "done",
+                    "data": {
+                        "conversation_id": str(conv_id),
+                        "message_id": str(message_id),
+                        "answer": answer,
+                        "sources": [asdict(s) for s in sources],
+                        "trace_id": trace_id,
+                        "model": served_model,
+                        "prompt_version": version,
+                        "latency_ms": latency_ms,
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "cost_usd": str(cost),
+                    },
+                }
+            finally:
+                if not finalized and emitted:
+                    # Client disconnect (or a provider failure past the first
+                    # token): the spend already happened, so seal the partial
+                    # answer and record it. Best effort — the stream is closing
+                    # either way, and a failure here must not mask the disconnect.
+                    partial = "".join(emitted)
+                    try:
+                        served_model = self._provider.effective_model(answer_model)
+                        cost = (
+                            compute_cost(
+                                served_model, tokens_in, estimate_tokens(partial)
+                            )
+                            if chunks
+                            else Decimal("0")
+                        )
+                        await self._record_answer(
+                            conv_id,
+                            principal,
+                            partial,
+                            served_model,
+                            version,
+                            trace_id,
+                            int((perf_counter() - started) * 1000),
+                            tokens_in,
+                            estimate_tokens(partial),
+                            cost,
+                            sources,
+                            route,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "failed to record partial answer after stream close", exc_info=True
+                        )
 
     async def _record_user_message(
         self,

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -92,6 +93,53 @@ async def test_chat_emits_error_event_on_stream_failure(app: FastAPI, client: As
     assert resp.status_code == 200
     assert "event: error" in resp.text
     assert "Please try again" in resp.text
+
+
+class _StallingOrchestrator:
+    """Emits one event, then stalls like a hung provider until released."""
+
+    def __init__(self) -> None:
+        self.released = asyncio.Event()
+
+    async def stream(
+        self,
+        query: str,
+        principal: object,
+        conversation_id: object = None,
+        *,
+        surface: object = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        yield {"event": "token", "data": {"text": "…"}}
+        await self.released.wait()
+        yield {"event": "done", "data": {"answer": "…"}}
+
+
+async def test_chat_sends_keepalive_pings_during_a_silent_gap(
+    app: FastAPI,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quiet model must not look like a dead connection: comment-frame pings
+    keep intermediaries from buffering or timing out the stream."""
+    fake = _StallingOrchestrator()
+    app.dependency_overrides[get_chat_orchestrator] = lambda: fake
+    monkeypatch.setenv("SSE_KEEPALIVE_S", "0.01")
+    get_settings.cache_clear()
+    try:
+
+        async def release_soon() -> None:
+            await asyncio.sleep(0.25)
+            fake.released.set()
+
+        asyncio.get_running_loop().create_task(release_soon())
+        resp = await client.post("/api/chat", json={"query": "stall"})
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+    assert resp.status_code == 200
+    assert resp.text.count(": keepalive") > 0
+    assert "event: done" in resp.text
 
 
 class _StubMessage:

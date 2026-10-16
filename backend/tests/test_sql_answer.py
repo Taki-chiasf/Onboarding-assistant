@@ -165,6 +165,38 @@ async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatc
     assert assistant[0].detail["sql"]["sql"] == "SELECT id FROM org_members"
 
 
+async def test_client_disconnect_mid_stream_records_the_partial_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closing connection is a client event, not a billing hole: whatever the
+    summarizer streamed is sealed into the transcript and lands in the ledger."""
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    provider = FakeProvider(
+        responses={
+            "fake-builder": "SELECT id, name FROM org_members",
+            "fake-grounding": "Ada is here",
+        }
+    )
+    result = SqlResult(columns=["id", "name"], rows=[(1, "Ada")], truncated=False, latency_ms=7)
+    answerer = _answerer(provider, result)
+
+    stream = answerer.stream("who is in my dept?", _principal())
+    first = await stream.__anext__()
+    second = await stream.__anext__()
+    assert first["event"] == "sql"
+    assert second["event"] == "token"
+
+    await stream.aclose()  # the client went away mid-stream
+
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    # Fake models price at zero, so the billing side is asserted by the RAG
+    # disconnect test; here the partial summary itself must survive a close.
+    assert len(assistant) == 1
+    assert assistant[0].content == "Ada "
+    assert "sql" in assistant[0].detail
+
+
 async def test_stream_records_cost_for_builder_and_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

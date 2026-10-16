@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # not a secret: see INSECURE_SESSION_SECRET for what startup does with it.
     session_secret: str = INSECURE_SESSION_SECRET
 
+    # Forced disconnect pings: an SSE comment frame every N seconds while the
+    # model is silent, so proxies and gateways do not buffer or time out a
+    # healthy stream. 0 disables pinging.
+    sse_keepalive_s: float = 15.0
+
     # Per-user daily token budget (tokens in + out, summed across models). The
     # request that would reach the cap is rejected; 0 disables the cap. The
     # spend threshold only raises a runaway alert, it never blocks.

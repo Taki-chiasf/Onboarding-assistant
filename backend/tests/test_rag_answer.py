@@ -222,3 +222,53 @@ async def test_stream_persists_the_router_verdict(monkeypatch: pytest.MonkeyPatc
     assert assistant[0].detail is not None
     assert assistant[0].detail["route"] == route
     assert assistant[0].detail["sources"][0]["id"] == "chunk-1"
+
+
+async def test_client_disconnect_mid_stream_records_the_partial_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the stream is a client event, not a billing hole: whatever the
+    model generated is sealed into the transcript and lands in the ledger."""
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    provider = _FakeProvider(["16 ", "weeks"])
+    answerer, _ = _answerer(provider, [_chunk()])
+
+    stream = answerer.stream("how much leave?", _principal())
+    first = await stream.__anext__()
+    second = await stream.__anext__()
+    assert first["event"] == "sources"
+    assert second["data"]["text"] == "16 "
+
+    await stream.aclose()  # the client went away mid-stream
+
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0].content == "16 "
+    assert assistant[0].cost_usd > 0
+
+
+class _DyingProvider:
+    """Streams one token, then fails the way a throttled model does."""
+
+    def effective_model(self, model: str) -> str:
+        return model
+
+    async def stream(self, model: str, messages: list[object]) -> AsyncIterator[str]:
+        yield "hi "
+        raise RuntimeError("connection reset by provider")
+
+
+async def test_provider_failure_mid_stream_records_the_partial_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    added: list[Any] = []
+    _patch_session_factory(monkeypatch, added)
+    answerer, _ = _answerer(_DyingProvider(), [_chunk()])  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError):
+        _ = [e async for e in answerer.stream("how much leave?", _principal())]
+
+    assistant = [obj for obj in added if getattr(obj, "role", None) == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0].content == "hi "

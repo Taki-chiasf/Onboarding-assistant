@@ -109,94 +109,141 @@ class SqlAnswerer:
 
             conv_id = await self._record_user_message(query, principal, trace_id, conversation_id)
 
-            with tracer.start_as_current_span("sql_generate"):
-                built = await self._builder.build(query)
-            span.set_attribute("sql.prompt_version", built.prompt_version)
-
-            with tracer.start_as_current_span("sql_execute"):
-                result = await self._executor.execute(
-                    built.sql,
-                    dept=principal.dept,
-                    role=principal.role,
-                    principal=principal.email,
-                    trace_id=trace_id,
-                )
-
-            sql_detail = SqlEvent(
-                sql=built.sql,
-                row_count=len(result.rows),
-                truncated=result.truncated,
-                latency_ms=result.latency_ms,
-            )
-            yield {"event": "sql", "data": asdict(sql_detail)}
-
+            # Streaming state for the disconnect path: the builder tokens are
+            # already spent by the time anything is streamed, so whatever the
+            # summarizer emitted before the generator closed gets recorded too.
+            emitted: list[str] = []
             summary_model = self._models.models["grounding"]
+            version = prompt_version(SQL_SUMMARIZE_PROMPT)
             summary_tokens_in = 0
+            finalized = False
+            try:
+                with tracer.start_as_current_span("sql_generate"):
+                    built = await self._builder.build(query)
+                span.set_attribute("sql.prompt_version", built.prompt_version)
 
-            if not result.rows:
-                answer = NO_MATCHING_RECORDS
-                version = prompt_version(SQL_SUMMARIZE_PROMPT)
-                yield {"event": "token", "data": {"text": answer}}
-            else:
-                messages, version = build_summary_messages(query, result)
-                summary_tokens_in = estimate_tokens("".join(m.content for m in messages))
-                parts: list[str] = []
-                with tracer.start_as_current_span("sql_summarize"):
-                    async for token in self._provider.stream(summary_model, messages):
-                        parts.append(token)
-                        yield {"event": "token", "data": {"text": token}}
-                answer = "".join(parts)
+                with tracer.start_as_current_span("sql_execute"):
+                    result = await self._executor.execute(
+                        built.sql,
+                        dept=principal.dept,
+                        role=principal.role,
+                        principal=principal.email,
+                        trace_id=trace_id,
+                    )
 
-            latency_ms = int((perf_counter() - started) * 1000)
-            tokens_out = estimate_tokens(answer)
-            sql_tokens_out = estimate_tokens(built.sql)
-            builder_model = self._provider.effective_model(self._models.models["sql_builder"])
-            served_model = self._provider.effective_model(summary_model)
-            builder_cost = compute_cost(builder_model, built.tokens_in, sql_tokens_out)
-            summary_cost = compute_cost(served_model, summary_tokens_in, tokens_out)
-            cost = builder_cost + summary_cost
+                sql_detail = SqlEvent(
+                    sql=built.sql,
+                    row_count=len(result.rows),
+                    truncated=result.truncated,
+                    latency_ms=result.latency_ms,
+                )
+                yield {"event": "sql", "data": asdict(sql_detail)}
 
-            message_id = await self._record_answer(
-                conv_id,
-                principal,
-                answer,
-                served_model,
-                version,
-                trace_id,
-                latency_ms,
-                cost,
-                built.tokens_in,
-                sql_tokens_out,
-                builder_cost,
-                summary_tokens_in,
-                tokens_out,
-                summary_cost,
-                sql_detail,
-                route,
-            )
+                if not result.rows:
+                    answer = NO_MATCHING_RECORDS
+                    emitted.append(answer)
+                    yield {"event": "token", "data": {"text": answer}}
+                else:
+                    messages, version = build_summary_messages(query, result)
+                    summary_tokens_in = estimate_tokens("".join(m.content for m in messages))
+                    with tracer.start_as_current_span("sql_summarize"):
+                        async for token in self._provider.stream(summary_model, messages):
+                            emitted.append(token)
+                            yield {"event": "token", "data": {"text": token}}
+                    answer = "".join(emitted)
 
-            span.set_attribute("answer.row_count", len(result.rows))
-            yield {
-                "event": "done",
-                "data": {
-                    "conversation_id": str(conv_id),
-                    "message_id": str(message_id),
-                    "answer": answer,
-                    "sql": built.sql,
-                    "row_count": len(result.rows),
-                    "truncated": result.truncated,
-                    "sql_latency_ms": result.latency_ms,
-                    "trace_id": trace_id,
-                    "model": served_model,
-                    "sql_model": builder_model,
-                    "prompt_version": version,
-                    "sql_prompt_version": built.prompt_version,
-                    "latency_ms": latency_ms,
-                    "tokens_in": summary_tokens_in,
-                    "tokens_out": tokens_out,
-                    "cost_usd": str(cost),
-                },
-            }
+                latency_ms = int((perf_counter() - started) * 1000)
+                tokens_out = estimate_tokens(answer)
+                sql_tokens_out = estimate_tokens(built.sql)
+                builder_model = self._provider.effective_model(self._models.models["sql_builder"])
+                served_model = self._provider.effective_model(summary_model)
+                builder_cost = compute_cost(builder_model, built.tokens_in, sql_tokens_out)
+                summary_cost = compute_cost(served_model, summary_tokens_in, tokens_out)
+                cost = builder_cost + summary_cost
+
+                message_id = await self._record_answer(
+                    conv_id,
+                    principal,
+                    answer,
+                    served_model,
+                    version,
+                    trace_id,
+                    latency_ms,
+                    cost,
+                    built.tokens_in,
+                    sql_tokens_out,
+                    builder_cost,
+                    summary_tokens_in,
+                    tokens_out,
+                    summary_cost,
+                    sql_detail,
+                    route,
+                )
+                finalized = True
+
+                span.set_attribute("answer.row_count", len(result.rows))
+                yield {
+                    "event": "done",
+                    "data": {
+                        "conversation_id": str(conv_id),
+                        "message_id": str(message_id),
+                        "answer": answer,
+                        "sql": built.sql,
+                        "row_count": len(result.rows),
+                        "truncated": result.truncated,
+                        "sql_latency_ms": result.latency_ms,
+                        "trace_id": trace_id,
+                        "model": served_model,
+                        "sql_model": builder_model,
+                        "prompt_version": version,
+                        "sql_prompt_version": built.prompt_version,
+                        "latency_ms": latency_ms,
+                        "tokens_in": summary_tokens_in,
+                        "tokens_out": tokens_out,
+                        "cost_usd": str(cost),
+                    },
+                }
+            finally:
+                if not finalized and emitted:
+                    # Client disconnect (or a provider failure past the first
+                    # token): the build and summary spend already happened, so
+                    # seal the partial answer and bill it. Best effort — the
+                    # stream is closing either way.
+                    partial = "".join(emitted)
+                    partial_latency = int((perf_counter() - started) * 1000)
+                    try:
+                        sql_tokens_out = estimate_tokens(built.sql)
+                        builder_model = self._provider.effective_model(
+                            self._models.models["sql_builder"]
+                        )
+                        served_model = self._provider.effective_model(summary_model)
+                        builder_cost = compute_cost(builder_model, built.tokens_in, sql_tokens_out)
+                        summary_tokens_out = estimate_tokens(partial)
+                        summary_cost = compute_cost(
+                            served_model, summary_tokens_in, summary_tokens_out
+                        )
+                        await self._record_answer(
+                            conv_id,
+                            principal,
+                            partial,
+                            served_model,
+                            version,
+                            trace_id,
+                            partial_latency,
+                            builder_cost + summary_cost,
+                            built.tokens_in,
+                            sql_tokens_out,
+                            builder_cost,
+                            summary_tokens_in,
+                            summary_tokens_out,
+                            summary_cost,
+                            sql_detail,
+                            route,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "failed to record partial answer after stream close", exc_info=True
+                        )
 
     async def _record_user_message(
         self,
