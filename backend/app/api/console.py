@@ -20,9 +20,9 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import Float, cast, func, or_, select
 
-from app.api.admin import AdminDep, SessionFactoryDep
+from app.api.admin import AdminDep
 from app.core.crypto import Cipher, get_cipher
-from app.core.deps import SettingsDep
+from app.core.deps import SessionFactoryDep, SettingsDep
 from app.core.fallback import is_dont_know
 from app.eval.gates import GATES
 from app.history import message_context, open_wrapped_key, read_text

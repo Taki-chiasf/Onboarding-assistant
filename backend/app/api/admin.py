@@ -12,15 +12,16 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
 from app.core.budget import cost_window
-from app.core.deps import SettingsDep
+from app.core.deps import SessionFactoryDep, SettingsDep
+from app.core.deps import get_session_factory as get_session_factory  # re-exported: tests target it
 from app.models import EvalCase, Feedback, Message
 from app.router.schema import Intent
 
@@ -30,16 +31,6 @@ MAX_WINDOW_DAYS = 90
 MAX_REVIEW_CASES = 200
 
 
-def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
-    engine = getattr(request.app.state, "engine", None)
-    if engine is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="database is not configured",
-        )
-    return async_sessionmaker(engine, expire_on_commit=False)
-
-
 def require_admin(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
     if principal.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin role required")
@@ -47,7 +38,6 @@ def require_admin(principal: Annotated[Principal, Depends(get_principal)]) -> Pr
 
 
 AdminDep = Annotated[Principal, Depends(require_admin)]
-SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 
 class DayCost(BaseModel):

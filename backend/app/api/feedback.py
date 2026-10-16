@@ -13,14 +13,16 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
 from app.core.crypto import get_cipher
+from app.core.deps import SessionFactoryDep
+from app.core.deps import get_session_factory as get_session_factory  # re-exported: tests target it
 from app.core.redact import redact_pii
 from app.history import message_context, open_wrapped_key, read_text
 from app.models import Conversation, EvalCase, Feedback, Message
@@ -42,18 +44,7 @@ class FeedbackAck(BaseModel):
     filed: bool
 
 
-def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
-    engine = getattr(request.app.state, "engine", None)
-    if engine is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="database is not configured",
-        )
-    return async_sessionmaker(engine, expire_on_commit=False)
-
-
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
-SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 
 async def _user_prompt(

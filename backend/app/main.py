@@ -4,8 +4,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from sqlalchemy.exc import DisconnectionError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.api import admin, auth, chat, code, console, feedback, health, oidc, webhooks
@@ -79,6 +81,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await redis_client.aclose()
 
 
+def _db_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """A configured database that cannot be reached is an operational state.
+
+    Connections refused or pooled away mid-request surface as SQLAlchemy
+    operational errors; report them as 503 with a stable payload rather than a
+    stack-trace 500. The exception text stays out of the log line, because a
+    statement embedded in the error could echo caller input.
+    """
+    logger.warning("database unavailable for %s", request.url.path)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "database is not available"},
+    )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -93,6 +110,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     FastAPIInstrumentor.instrument_app(app)
+    app.add_exception_handler(OperationalError, _db_unavailable)
+    app.add_exception_handler(DisconnectionError, _db_unavailable)
     app.include_router(health.router)
     app.include_router(oidc.router)
     app.include_router(auth.router)
