@@ -57,9 +57,17 @@ export type ChatMessage = {
   /* The caller's saved rating, rehydrated on reload. */
   feedback?: "up" | "down";
   correction?: string;
+  /* Why this turn ended without its terminal event: the caller pressed
+     Stop, or the connection dropped mid-answer. */
+  stopReason?: "user" | "connection";
   /* Client-side identity, stable from streaming draft through the
      finalized turn, so a completed answer never re-runs its entrance. */
   uid?: string;
+};
+
+const STOP_NOTICES: Record<Exclude<ChatMessage["stopReason"], undefined>, string> = {
+  user: "Generation stopped",
+  connection: "Connection lost — the answer may be cut off",
 };
 
 function stripCitations(content: string): string {
@@ -343,8 +351,15 @@ export function Transcript({
                   {stripCitations(message.content)}
                 </ReactMarkdown>
               </div>
+            ) : message.stopReason ? (
+              <p className="text-sm text-muted-foreground">{STOP_NOTICES[message.stopReason]}</p>
             ) : (
               <PixelCursor />
+            )}
+            {message.stopReason && message.content && (
+              <p className="mt-1.5 font-mono text-[11px] tracking-[0.04em] text-muted-foreground">
+                {STOP_NOTICES[message.stopReason]}
+              </p>
             )}
             {message.clarify && message.query && (
               <motion.div

@@ -2,14 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, Gauge, Plus, Trash2 } from "lucide-react";
+import { ArrowUp, Gauge, Plus, Square, Trash2 } from "lucide-react";
 
 import { LogoutButton } from "@/components/logout-button";
 import { PixelMark } from "@/components/pixel-mark";
 import { Transcript } from "@/components/transcript";
 import type { ChatMessage, Source, SqlDetail, Surface } from "@/components/transcript";
 import { Button } from "@/components/ui/button";
+import { readSse } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { EASE, riseIn, stagger, spring, transition } from "@/lib/motion";
 
@@ -31,36 +33,6 @@ const SUGGESTIONS = [
   "What is the expense limit for a team dinner?",
   "How do I get my laptop set up?",
 ];
-
-async function readSse(
-  body: ReadableStream<Uint8Array>,
-  onEvent: (event: string, data: Record<string, unknown>) => void
-) {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice("event: ".length).trim();
-        else if (line.startsWith("data: ")) data += line.slice("data: ".length);
-      }
-      if (!data) continue;
-      try {
-        onEvent(event, JSON.parse(data) as Record<string, unknown>);
-      } catch {
-        /* ignore malformed frame */
-      }
-    }
-  }
-}
 
 function EmptyState({
   busy,
@@ -118,6 +90,7 @@ function EmptyState({
 }
 
 export function Chat({ principal }: { principal: Principal }) {
+  const router = useRouter();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -129,12 +102,27 @@ export function Chat({ principal }: { principal: Principal }) {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  /* A send that failed before the stream started reads as an actionable error
+     just above the composer, with a retry affordance. */
+  const [sendError, setSendError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
+  /* The in-flight turn's controller, for the Stop affordance. */
+  const abortRef = useRef<AbortController | null>(null);
+  /* Authoritative draft mirror: the streaming loop is the only writer, so
+     handlers read the ref instead of racing a setState round-trip, and the
+     finalize step does exactly one pure append. */
+  const draftRef = useRef<ChatMessage | null>(null);
+  /* Last query the user tried to send, for the retry affordance. */
+  const lastQueryRef = useRef<string>("");
   /* View key drives the switch animation and only changes on explicit
      navigation, never when the backend assigns a new conversation id
      mid-stream. */
   const [viewKey, setViewKey] = useState<string>("new");
+
+  /* Leaving the page cancels the stream so its tokens are not billed to a
+     component nobody can see. */
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
     fetch("/api/conversations")
@@ -225,8 +213,17 @@ export function Chat({ principal }: { principal: Principal }) {
     }
   }
 
+  function setDraftSync(message: ChatMessage | null) {
+    draftRef.current = message;
+    setDraft(message);
+  }
+
   function applyAssistant(update: (prev: ChatMessage) => ChatMessage) {
-    setDraft((prev) => (prev ? update(prev) : prev));
+    const prev = draftRef.current;
+    if (!prev) return;
+    const next = update(prev);
+    draftRef.current = next;
+    setDraft(next);
   }
 
   function updateMessage(messageId: string, patch: Partial<ChatMessage>) {
@@ -235,9 +232,11 @@ export function Chat({ principal }: { principal: Principal }) {
         message.messageId === messageId ? { ...message, ...patch } : message
       )
     );
-    setDraft((prev) =>
-      prev && prev.messageId === messageId ? { ...prev, ...patch } : prev
-    );
+    if (draftRef.current?.messageId === messageId) {
+      const next = { ...draftRef.current, ...patch };
+      draftRef.current = next;
+      setDraft(next);
+    }
   }
 
   async function submitFeedback(
@@ -273,12 +272,49 @@ export function Chat({ principal }: { principal: Principal }) {
     const query = (pinned?.query ?? input).trim();
     if (!query || busy) return;
     if (!pinned) setInput("");
+    lastQueryRef.current = query;
+    setSendError(null);
     setBusy(true);
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: query, uid: `u-${seq.current++}` },
-    ]);
-    setDraft({ role: "assistant", content: "", sources: [], query, uid: `a-${seq.current++}` });
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: query,
+      uid: `u-${seq.current++}`,
+    };
+    setMessages((prev) => [...prev, userMessage]);
+    setDraftSync({
+      role: "assistant",
+      content: "",
+      sources: [],
+      query,
+      uid: `a-${seq.current++}`,
+    });
+
+    /* A turn's conversation id arrives on every answer-path event; adopting it
+       from sources *and* done (and clarify, and refusal paths) means the id is
+       bound no matter which surface answered. The closure mirror also keeps
+       repeated events consistent while state updates settle. */
+    let turnConversationId = conversationId;
+    let createdNew = false;
+    let terminalSeen = false;
+    const adopt = (data: Record<string, unknown>) => {
+      if (!turnConversationId && data.conversation_id) {
+        turnConversationId = String(data.conversation_id);
+        setConversationId(turnConversationId);
+        createdNew = true;
+      }
+    };
+
+    const failure = (message: string) => {
+      /* The turn never reached the assistant: undo the optimistic transcript
+         entries and hand the query back for a retry. */
+      setMessages((prev) => prev.filter((m) => m.uid !== userMessage.uid));
+      setDraftSync(null);
+      setInput(query);
+      setSendError(message);
+    };
 
     try {
       const res = await fetch("/api/chat", {
@@ -289,17 +325,20 @@ export function Chat({ principal }: { principal: Principal }) {
           conversation_id: conversationId,
           surface: pinned?.surface,
         }),
+        signal: controller.signal,
       });
+      if (res.status === 401) {
+        // Session expired mid-chat; hand the turn back and re-login.
+        failure("Your session expired. Sign in again to continue.");
+        router.push("/login");
+        return;
+      }
       if (!res.ok || !res.body) {
         throw new Error("request failed");
       }
-      let createdNew = false;
       await readSse(res.body, (event, data) => {
+        adopt(data);
         if (event === "sources") {
-          if (!conversationId && data.conversation_id) {
-            setConversationId(String(data.conversation_id));
-            createdNew = true;
-          }
           applyAssistant((m) => ({ ...m, sources: (data.sources as ChatMessage["sources"]) ?? [] }));
         } else if (event === "sql") {
           applyAssistant((m) => ({ ...m, sql: data as unknown as ChatMessage["sql"] }));
@@ -308,11 +347,13 @@ export function Chat({ principal }: { principal: Principal }) {
         } else if (event === "token") {
           applyAssistant((m) => ({ ...m, content: m.content + String(data.text ?? "") }));
         } else if (event === "limit" || event === "error") {
+          terminalSeen = true;
           applyAssistant((m) => ({
             ...m,
             content: String(data.message ?? "Something went wrong."),
           }));
         } else if (event === "done") {
+          terminalSeen = true;
           applyAssistant((m) => ({
             ...m,
             content: String(data.answer ?? m.content),
@@ -328,14 +369,32 @@ export function Chat({ principal }: { principal: Principal }) {
         }
       });
       if (createdNew) refreshConversations();
-    } catch {
-      applyAssistant((m) => ({ ...m, content: m.content || "Something went wrong." }));
+    } catch (streamError) {
+      const userStopped =
+        streamError instanceof Error && streamError.name === "AbortError";
+      if (userStopped) {
+        applyAssistant((m) => ({ ...m, stopReason: "user" }));
+      } else if (!terminalSeen) {
+        failure("Could not reach the assistant. Your message was not sent.");
+      } else {
+        applyAssistant((m) => ({ ...m, content: m.content || "Something went wrong." }));
+      }
     } finally {
-      setDraft((prev) => {
-        if (prev) setMessages((existing) => [...existing, prev]);
-        return null;
-      });
+      /* Exactly one pure append per turn: the draft snapshot comes from the
+         ref, never from inside a setState updater. */
+      const finalDraft = draftRef.current;
+      if (finalDraft) {
+        const cutShort = !terminalSeen && !finalDraft.stopReason;
+        const finalMessage: ChatMessage = {
+          ...finalDraft,
+          content: finalDraft.content || (cutShort ? "" : ""),
+          stopReason: finalDraft.stopReason ?? (cutShort ? "connection" : undefined),
+        };
+        setMessages((existing) => [...existing, finalMessage]);
+        setDraftSync(null);
+      }
       setBusy(false);
+      abortRef.current = null;
     }
   }
 
@@ -546,10 +605,25 @@ export function Chat({ principal }: { principal: Principal }) {
             </div>
           </div>
 
+          {sendError && (
+            <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-3 px-4 md:px-6">
+              <p className="text-sm text-destructive">{sendError}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void send(lastQueryRef.current ? { query: lastQueryRef.current } : undefined)}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
+
           <form
             className="mx-auto flex w-full max-w-4xl items-center gap-2 px-4 py-4 md:px-6"
             onSubmit={(event) => {
               event.preventDefault();
+              if (busy) return;
               void send();
             }}
           >
@@ -567,21 +641,34 @@ export function Chat({ principal }: { principal: Principal }) {
                 placeholder="Ask about parental leave, expenses, laptop setup…"
                 className="min-w-0 flex-1 bg-transparent py-1.5 text-[16px] outline-none caret-brand-orange placeholder:text-muted-foreground"
               />
-              <motion.button
-                type="submit"
-                disabled={busy || !input.trim()}
-                aria-label="Send"
-                whileTap={{ scale: 0.88 }}
-                transition={spring}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/85 disabled:bg-secondary disabled:text-muted-foreground"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </motion.button>
+              {busy ? (
+                <motion.button
+                  type="button"
+                  onClick={() => abortRef.current?.abort()}
+                  aria-label="Stop generating"
+                  whileTap={{ scale: 0.88 }}
+                  transition={spring}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground transition-colors hover:bg-secondary/80"
+                >
+                  <Square className="h-4 w-4 fill-current" />
+                </motion.button>
+              ) : (
+                <motion.button
+                  type="submit"
+                  disabled={!input.trim()}
+                  aria-label="Send"
+                  whileTap={{ scale: 0.88 }}
+                  transition={spring}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-colors hover:bg-primary/85 disabled:bg-secondary disabled:text-muted-foreground"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </motion.button>
+              )}
               <motion.span
                 aria-hidden
                 className="bg-ramp absolute inset-x-0 bottom-0 h-[2px] origin-left"
                 initial={false}
-                animate={{ scaleX: composerFocused ? 1 : 0 }}
+                animate={{ scaleX: busy || composerFocused ? 1 : 0 }}
                 transition={{ duration: 0.25, ease: EASE }}
               />
             </div>
