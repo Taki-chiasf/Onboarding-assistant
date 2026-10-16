@@ -187,3 +187,50 @@ async def test_persona_login_is_disabled_when_oidc_configured(
         )
         assert login.status_code == 403
     get_settings.cache_clear()
+
+
+async def test_persona_login_rejects_unseeded_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, base = _app_with_env(monkeypatch, MOCK_OIDC="2")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=base) as c:
+        forged = await c.post(
+            "/auth/dev/login",
+            json={
+                "sub": "attacker-1",
+                "email": "attacker@demo.example",
+                "dept": "Engineering",
+                "role": "admin",
+            },
+        )
+        assert forged.status_code == 403
+        assert "session" not in forged.cookies
+
+        me = await c.get("/auth/dev/me")
+        assert me.status_code == 401
+    get_settings.cache_clear()
+
+
+async def test_persona_login_signs_the_stored_persona_not_the_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, base = _app_with_env(monkeypatch, MOCK_OIDC="2")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url=base) as c:
+        personas = (await c.get("/auth/dev/personas")).json()
+        admin_persona = next(p for p in personas if p["role"] == "admin")
+
+        login = await c.post(
+            "/auth/dev/login",
+            json={**admin_persona, "email": "not-the-stored-email@demo.example"},
+        )
+        assert login.status_code == 200
+        assert login.json()["email"] == admin_persona["email"]
+
+        me = await c.get("/auth/dev/me")
+        assert me.status_code == 200
+        body = me.json()
+        assert body["sub"] == admin_persona["sub"]
+        assert body["email"] == admin_persona["email"]
+        assert body["dept"] == admin_persona["dept"]
+        assert body["role"] == admin_persona["role"]
+    get_settings.cache_clear()

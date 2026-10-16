@@ -25,6 +25,18 @@ def _persona_login_enabled(settings: SettingsDep) -> bool:
     return settings.mock_oidc == 2 and load_oidc_config(settings) is None
 
 
+def _seeded_persona(sub: str) -> Principal | None:
+    """The demo identity with this sub, or None for anything else.
+
+    Only seeded personas can be signed in. The client's payload selects an
+    identity; it never defines one, so an arbitrary sub cannot mint a role.
+    """
+    for persona in DEMO_PERSONAS:
+        if persona.sub == sub:
+            return persona
+    return None
+
+
 @router.post("/login", response_model=Principal)
 async def login(payload: Principal, response: Response, settings: SettingsDep) -> Principal:
     if not _persona_login_enabled(settings):
@@ -32,9 +44,15 @@ async def login(payload: Principal, response: Response, settings: SettingsDep) -
             status_code=status.HTTP_403_FORBIDDEN,
             detail="mock persona login is disabled",
         )
-    token = encode_principal(make_serializer(settings.session_secret), payload)
+    persona = _seeded_persona(payload.sub)
+    if persona is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="unknown persona",
+        )
+    token = encode_principal(make_serializer(settings.session_secret), persona)
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
-    return payload
+    return persona
 
 
 @router.post("/logout")
