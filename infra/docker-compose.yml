@@ -8,7 +8,10 @@ services:
       POSTGRES_PASSWORD: app
       POSTGRES_DB: onboarding_assistant
     ports:
-      - "5432:5432"
+      # Stateful services bind to loopback only: the containers talk over the
+      # compose network, so a host port is for local psql/redis-cli or tests,
+      # never for the LAN or the internet.
+      - "127.0.0.1:5432:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./infra/docker/initdb:/docker-entrypoint-initdb.d:ro
@@ -20,21 +23,27 @@ services:
 
   redis:
     image: redis:7-alpine
+    # A token password even on the internal network: with loopback host
+    # binding plus a password, a stray port publish or container escape does
+    # not hand out an unauthenticated queue that can write chat history.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-redis-demo-token}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-demo-token}
 
   otel-collector:
     image: otel/opentelemetry-collector:0.159.0
     ports:
-      - "4317:4317"
-      - "4318:4318"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
     volumes:
       - ./infra/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
 
@@ -56,7 +65,7 @@ services:
       OIDC_ALLOWED_DEPARTMENTS: ${OIDC_ALLOWED_DEPARTMENTS:-}
       OIDC_ALLOWED_ROLES: ${OIDC_ALLOWED_ROLES:-employee,admin}
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis-demo-token}@redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-mistral}
@@ -86,7 +95,7 @@ services:
       dockerfile: ingest-worker/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/onboarding_assistant
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis-demo-token}@redis:6379/0
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
@@ -137,7 +146,7 @@ services:
       MAX_CLIENT_CONN: "100"
       DEFAULT_POOL_SIZE: "20"
     ports:
-      - "6432:5432"
+      - "127.0.0.1:6432:5432"
     depends_on:
       db:
         condition: service_healthy
@@ -197,7 +206,7 @@ services:
     volumes:
       - ./infra/tempo.yaml:/etc/tempo.yaml:ro
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3200:3200"
 
   loki:
     image: grafana/loki:3.1.0
@@ -206,17 +215,22 @@ services:
     volumes:
       - ./infra/loki.yaml:/etc/loki.yaml:ro
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.4.0
     profiles: ["observability"]
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # The dashboards are visible after signing in with the credentials below.
+      # Anonymous access is off: an open demo dashboard that can browse every
+      # trace (emails, query text) should not sit behind zero auth.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-before-sharing}
+    # Bound to loopback like the stateful stores; expose it only through a
+    # tunneling proxy if it must be reachable remotely.
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     depends_on:
       tempo:
         condition: service_started
