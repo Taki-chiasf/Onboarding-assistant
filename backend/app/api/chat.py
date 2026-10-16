@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.auth.mock_oidc import get_principal
 from app.auth.principal import Principal
-from app.core.budget import BudgetDecision, daily_usage, evaluate, record_runaway
+from app.core.budget import (
+    BudgetDecision,
+    Usage,
+    all_usage,
+    daily_usage,
+    evaluate,
+    record_runaway,
+)
 from app.core.config import get_settings
 from app.core.crypto import get_cipher
 from app.history import (
@@ -98,7 +105,9 @@ async def enforce_budget(request: Request, principal: PrincipalDep) -> BudgetDec
 
     Resolved before the stream starts so an over-budget request never reaches a
     model. Without a database (local unit runs) the cap cannot be evaluated, so
-    the turn is allowed.
+    the turn is allowed. Two layers apply: the caller's own daily budget, and
+    the deployment's provider-wide allowance for the day, which clamps spend
+    even for callers who rotate identity.
     """
     settings = get_settings()
     engine: AsyncEngine | None = getattr(request.app.state, "engine", None)
@@ -107,10 +116,15 @@ async def enforce_budget(request: Request, principal: PrincipalDep) -> BudgetDec
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         usage = await daily_usage(session, user_id=principal.sub, day=datetime.now(UTC).date())
+        global_usage: Usage | None = None
+        if settings.daily_global_tokens > 0:
+            global_usage = await all_usage(session, day=datetime.now(UTC).date())
     decision = evaluate(
         usage,
         token_budget=settings.daily_token_budget,
         cost_alert_usd=settings.daily_cost_alert_usd,
+        global_usage=global_usage,
+        global_token_budget=settings.daily_global_tokens,
     )
     if decision.runaway:
         record_runaway(principal.sub, decision)

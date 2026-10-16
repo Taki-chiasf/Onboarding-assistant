@@ -1,8 +1,14 @@
 import { NextRequest } from "next/server";
 
 import { backendUrl } from "@/lib/backend";
+import { LIMITS, clientKey, limitedResponse, rateLimit } from "@/lib/ratelimit";
 
 export async function POST(request: NextRequest) {
+  const limit = rateLimit(`chat:${clientKey(request)}`, LIMITS.chat.limit, LIMITS.chat.windowMs);
+  if (!limit.ok) {
+    return limitedResponse(limit.retryAfterS);
+  }
+
   const session = request.cookies.get("session")?.value;
   if (!session) {
     return new Response("unauthorized", { status: 401 });

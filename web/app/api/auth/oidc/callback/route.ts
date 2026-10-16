@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { backendUrl, copySessionCookie } from "@/lib/backend";
+import { LIMITS, clientKey, limitedResponse, rateLimit } from "@/lib/ratelimit";
 
 export async function GET(request: NextRequest) {
   const loginUrl = new URL("/login", request.nextUrl.origin);
@@ -9,6 +10,11 @@ export async function GET(request: NextRequest) {
   const state = params.get("state");
   const expectedState = request.cookies.get("oidc_state")?.value;
   const verifier = request.cookies.get("oidc_verifier")?.value;
+
+  const limit = rateLimit(`auth:${clientKey(request)}`, LIMITS.auth.limit, LIMITS.auth.windowMs);
+  if (!limit.ok) {
+    return limitedResponse(limit.retryAfterS);
+  }
 
   if (
     params.get("error") ||

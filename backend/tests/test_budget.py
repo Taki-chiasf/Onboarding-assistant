@@ -3,17 +3,21 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
+from app.api import chat as chat_mod
 from app.api.chat import enforce_budget, get_chat_orchestrator
 from app.auth.principal import Principal
 from app.core.budget import (
     BUDGET_LIMIT_MESSAGE,
+    GLOBAL_BUDGET_LIMIT_MESSAGE,
     BudgetDecision,
     Usage,
+    all_usage,
     daily_usage,
     evaluate,
 )
@@ -80,6 +84,82 @@ async def test_daily_usage_sums_tokens_and_cost() -> None:
     )
     assert usage.tokens == 1234
     assert usage.cost_usd == Decimal("0.5")
+
+
+async def test_all_usage_sums_every_caller_for_the_day() -> None:
+    from datetime import date
+
+    session = _StubSession([_Rows([(4321, Decimal("1.5"))])])
+    usage = await all_usage(cast(AsyncSession, session), day=date(2026, 10, 16))
+    assert usage.tokens == 4321
+    assert usage.cost_usd == Decimal("1.5")
+
+
+def test_evaluate_rejects_when_provider_wide_cap_reached() -> None:
+    decision = evaluate(
+        Usage(tokens=10, cost_usd=Decimal("0")),
+        token_budget=1000,
+        global_usage=Usage(tokens=1_500_000, cost_usd=Decimal("7")),
+        global_token_budget=1_500_000,
+    )
+    assert not decision.allowed
+    assert decision.message == GLOBAL_BUDGET_LIMIT_MESSAGE
+
+
+def test_evaluate_global_cap_disabled_never_rejects() -> None:
+    decision = evaluate(
+        Usage(tokens=10, cost_usd=Decimal("0.02")),
+        token_budget=1000,
+        global_usage=Usage(tokens=10_000_000, cost_usd=Decimal("99")),
+        global_token_budget=0,
+    )
+    assert decision.allowed
+
+
+async def test_enforce_budget_rejects_at_the_global_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's own ledger is far under budget; the deployment's is not."""
+    session = _StubSession(
+        [_Rows([(10, Decimal("0.1"))]), _Rows([(600, Decimal("2.0"))])]
+    )
+    monkeypatch.setattr(chat_mod, "async_sessionmaker", lambda *a, **k: lambda: session)
+    monkeypatch.setenv("DAILY_TOKEN_BUDGET", "100000")
+    monkeypatch.setenv("DAILY_GLOBAL_TOKENS", "600")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://example")
+    get_settings.cache_clear()
+    request = cast(
+        Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(engine=object())))
+    )
+    principal = Principal(
+        sub="alex-chen", email="alex.chen@demo.example", dept="Engineering", role="employee"
+    )
+    decision = await enforce_budget(request, principal)
+    assert not decision.allowed
+    assert "capacity" in (decision.message or "")
+    get_settings.cache_clear()
+
+
+async def test_enforce_budget_allows_under_both_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _StubSession(
+        [_Rows([(10, Decimal("0.1"))]), _Rows([(100, Decimal("0.5"))])]
+    )
+    monkeypatch.setattr(chat_mod, "async_sessionmaker", lambda *a, **k: lambda: session)
+    monkeypatch.setenv("DAILY_TOKEN_BUDGET", "100000")
+    monkeypatch.setenv("DAILY_GLOBAL_TOKENS", "600")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://example")
+    get_settings.cache_clear()
+    request = cast(
+        Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(engine=object())))
+    )
+    principal = Principal(
+        sub="alex-chen", email="alex.chen@demo.example", dept="Engineering", role="employee"
+    )
+    decision = await enforce_budget(request, principal)
+    assert decision.allowed
+    get_settings.cache_clear()
 
 
 class _FakeOrchestrator:

@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 BUDGET_LIMIT_MESSAGE = "Daily budget reached for your account — resets at 00:00 UTC."
 
+GLOBAL_BUDGET_LIMIT_MESSAGE = (
+    "The assistant is at capacity today — its shared allowance is spent. "
+    "Try again after 00:00 UTC."
+)
+
 _counter: Counter | None = None
 _alerted: set[tuple[str, str]] = set()
 
@@ -51,20 +56,40 @@ class BudgetDecision:
     runaway: bool = False
 
 
-def evaluate(usage: Usage, *, token_budget: int, cost_alert_usd: float = 0.0) -> BudgetDecision:
+def evaluate(
+    usage: Usage,
+    *,
+    token_budget: int,
+    cost_alert_usd: float = 0.0,
+    global_usage: Usage | None = None,
+    global_token_budget: int = 0,
+) -> BudgetDecision:
     """Decide whether a caller may run another request today.
 
     The budget is enforced at or above the cap, so the request that would push
     a user over is refused rather than admitted. A non-positive budget disables
-    the cap; a non-positive alert threshold disables the runaway flag.
+    the cap; a non-positive alert threshold disables the runaway flag. When a
+    provider-wide cap is set, a caller is refused once every caller's combined
+    spend reaches it, regardless of the caller's own usage.
     """
     over_budget = token_budget > 0 and usage.tokens >= token_budget
+    over_global = (
+        global_usage is not None
+        and global_token_budget > 0
+        and global_usage.tokens >= global_token_budget
+    )
     runaway = cost_alert_usd > 0 and usage.cost_usd >= Decimal(str(cost_alert_usd))
     return BudgetDecision(
-        allowed=not over_budget,
+        allowed=not (over_budget or over_global),
         tokens_used=usage.tokens,
         cost_usd=usage.cost_usd,
-        message=BUDGET_LIMIT_MESSAGE if over_budget else None,
+        message=(
+            BUDGET_LIMIT_MESSAGE
+            if over_budget
+            else GLOBAL_BUDGET_LIMIT_MESSAGE
+            if over_global
+            else None
+        ),
         runaway=runaway,
     )
 
@@ -78,6 +103,18 @@ async def daily_usage(session: AsyncSession, *, user_id: str, day: date) -> Usag
             select(tokens, cost).where(CostLedger.user_id == user_id, CostLedger.day == day)
         )
     ).one()
+    return Usage(tokens=int(row[0] or 0), cost_usd=Decimal(row[1] or 0))
+
+
+async def all_usage(session: AsyncSession, *, day: date) -> Usage:
+    """Sum every caller's tokens and spend for one day.
+
+    This is the provider-wide ceiling read: total Mistral spend for today
+    across the deployment, whatever identity or budget each caller has.
+    """
+    tokens = func.coalesce(func.sum(CostLedger.tokens_in + CostLedger.tokens_out), 0)
+    cost = func.coalesce(func.sum(CostLedger.cost_usd), 0)
+    row = (await session.execute(select(tokens, cost).where(CostLedger.day == day))).one()
     return Usage(tokens=int(row[0] or 0), cost_usd=Decimal(row[1] or 0))
 
 

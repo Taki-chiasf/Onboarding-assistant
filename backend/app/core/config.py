@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     daily_token_budget: int = 200_000
     daily_cost_alert_usd: float = 1.0
 
+    # Provider-wide cap for the day, summed across every caller. This is the
+    # layer a per-user budget cannot provide on the demo: a caller may rotate
+    # identity or persona, but combined spend still clamps here. 0 disables it.
+    daily_global_tokens: int = 1_500_000
+
     # Moderation screen over user input and ingested content. It never blocks;
     # it flags abuse/personal data for the redaction layer and observability.
     moderation_enabled: bool = True

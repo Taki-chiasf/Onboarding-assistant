@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { backendUrl } from "@/lib/backend";
+import { LIMITS, clientKey, limitedResponse, rateLimit } from "@/lib/ratelimit";
 
 type OidcPublicConfig = {
   authorize_url: string;
@@ -13,6 +14,11 @@ type OidcPublicConfig = {
 const PKCE_COOKIE_MAX_AGE = 600;
 
 export async function GET(request: NextRequest) {
+  const limit = rateLimit(`auth:${clientKey(request)}`, LIMITS.auth.limit, LIMITS.auth.windowMs);
+  if (!limit.ok) {
+    return limitedResponse(limit.retryAfterS);
+  }
+
   const modeRes = await fetch(`${backendUrl()}/auth/mode`, { cache: "no-store" }).catch(() => null);
   const mode = modeRes?.ok ? ((await modeRes.json()) as { oidc: OidcPublicConfig | null }) : null;
   if (!mode?.oidc) {
