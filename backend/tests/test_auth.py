@@ -138,6 +138,7 @@ async def test_auth_mode_oidc_returns_public_config(monkeypatch: pytest.MonkeyPa
         OIDC_ISSUER="https://tenant.example.auth0.com/",
         OIDC_CLIENT_ID="client-123",
         OIDC_AUDIENCE="https://api.example",
+        SESSION_SECRET="test-secret",
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url=base) as c:
         body = (await c.get("/auth/mode")).json()
@@ -172,6 +173,7 @@ async def test_persona_login_is_disabled_when_oidc_configured(
         MOCK_OIDC="2",
         OIDC_ISSUER="https://tenant.example.auth0.com/",
         OIDC_CLIENT_ID="client-123",
+        SESSION_SECRET="test-secret",
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url=base) as c:
         personas = await c.get("/auth/dev/personas")

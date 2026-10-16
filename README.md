@@ -222,7 +222,7 @@ The demo data is fully synthetic: a fictional company with departments,
 people, projects, assets, objectives, tickets, and a document corpus. No real
 company data is used anywhere.
 
-With `MOCK_OIDC=2` (the default) a persona picker on `/login` binds the session
+With `MOCK_OIDC=2` (the demo default) a persona picker on `/login` binds the session
 to one of the seeded identities for the whole conversation:
 
 | Persona | Department | Role | Scope |
@@ -232,11 +232,15 @@ to one of the seeded identities for the whole conversation:
 | Finance employee | Finance | employee | Finance docs and rows |
 
 The other auth modes: `MOCK_OIDC=1` injects a static developer principal on
-every request for backend-only work via curl, and setting the `OIDC_*`
-variables switches the web app to a real OIDC single sign-on flow (Auth0 or
+every request for backend-only work via curl (and is refused when an
+`OIDC_*` issuer is configured, so SSO can never be silently mocked away),
+and setting the `OIDC_*` variables switches the web app to a real OIDC single
+sign-on flow (Auth0 or
 Okta compatible). Requests carry only the caller's slug claims (`sub`, `email`,
 `dept`, `role`); the department and role are what scope every retrieval and
-every SQL query.
+every SQL query. Cookie sessions are signed with `SESSION_SECRET`; OIDC
+deployments must set it, and unset in persona mode degrades to an ephemeral
+per-boot secret with a startup warning.
 
 ## The knowledge base
 

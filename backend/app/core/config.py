@@ -2,6 +2,12 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The shipped default marks "no session secret configured". Cookie sessions
+# signed with it would be forgeable by anyone who has read the public repo, so
+# trust-bearing modes refuse it: OIDC deployments must set SESSION_SECRET and
+# the demo persona mode generates an ephemeral per-boot secret with a warning.
+INSECURE_SESSION_SECRET = "dev-only-insecure-secret"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -27,7 +33,12 @@ class Settings(BaseSettings):
     llm_retry_base_delay_s: float = 2.0
     llm_retry_max_delay_s: float = 30.0
 
-    mock_oidc: int = 1
+    # Mock auth mode: 0 = real auth only (static mode disabled, cookie sessions
+    # still honored), 1 = a shared static dev principal on every request, 2 =
+    # the demo persona picker. An OIDC issuer overrides both mock modes: 2
+    # disables persona login and 1 is refused at startup, because 1 would
+    # collapse every caller into one identity while SSO appears active.
+    mock_oidc: int = 0
     dev_principal_sub: str = "dev-user"
     dev_principal_email: str = "dev@example.com"
     dev_principal_dept: str = "Engineering"
@@ -53,7 +64,9 @@ class Settings(BaseSettings):
     oidc_allowed_departments: str = ""
     oidc_allowed_roles: str = "employee,admin"
 
-    session_secret: str = "dev-only-insecure-secret"
+    # Secret for signing the session cookie. The shipped default is a marker,
+    # not a secret: see INSECURE_SESSION_SECRET for what startup does with it.
+    session_secret: str = INSECURE_SESSION_SECRET
 
     # Per-user daily token budget (tokens in + out, summed across models). The
     # request that would reach the cap is rejected; 0 disables the cap. The
